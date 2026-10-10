@@ -96,16 +96,56 @@ function gerarDoc(tipo, c) {
 }
 
 // ─── OCR ─────────────────────────────────────────────────────────────────────
-async function extrairDados(base64, mediaType) {
+function normalizarMediaType(rawType, fileName) {
+  if (!rawType || rawType === "application/octet-stream") {
+    const ext = (fileName || "").split(".").pop().toLowerCase();
+    const map = { jpg:"image/jpeg", jpeg:"image/jpeg", png:"image/png", gif:"image/gif", webp:"image/webp", pdf:"application/pdf" };
+    return map[ext] || "image/jpeg";
+  }
+  if (rawType === "image/jpg") return "image/jpeg";
+  return rawType;
+}
+
+async function extrairDados(base64, mediaType, fileName) {
+  const mt = normalizarMediaType(mediaType, fileName);
+  const isPDF = mt === "application/pdf";
+
+  const contentBlock = isPDF
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
+    : { type: "image",    source: { type: "base64", media_type: mt, data: base64 } };
+
+  const headers = { "Content-Type": "application/json" };
+  if (isPDF) headers["anthropic-beta"] = "pdfs-2024-09-25";
+
   const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, messages:[{ role:"user", content:[
-      { type: mediaType==="application/pdf"?"document":"image", source:{type:"base64",media_type:mediaType,data:base64} },
-      { type:"text", text:`Extraia os dados deste documento e retorne APENAS JSON válido sem markdown:\n{"nome":"","cpf":"","rg":"","dataNascimento":"AAAA-MM-DD","endereco":"","nacionalidade":"","estadoCivil":"","profissao":"","cep":"","tipo_documento":""}` }
-    ]}] })
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      messages: [{
+        role: "user",
+        content: [
+          contentBlock,
+          { type: "text", text: `Analise este documento (RG, CPF, CNH, certidão ou comprovante de residência) e extraia os dados da pessoa. Retorne APENAS JSON válido, sem markdown, sem texto extra:\n{"nome":"","cpf":"","rg":"","dataNascimento":"AAAA-MM-DD","endereco":"","nacionalidade":"","estadoCivil":"","profissao":"","cep":"","tipo_documento":""}\nDatas em AAAA-MM-DD. Campos não encontrados ficam como string vazia.` }
+        ]
+      }]
+    })
   });
+
+  if (!r.ok) throw new Error(`API erro ${r.status}: ${await r.text()}`);
+
   const d = await r.json();
-  try { return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim()); } catch { return {}; }
+  if (d.error) throw new Error(d.error.message || "Erro na API");
+
+  const raw = d.content?.[0]?.text || "{}";
+  try {
+    return JSON.parse(raw.replace(/```json|```/g, "").trim());
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (match) { try { return JSON.parse(match[0]); } catch {} }
+    throw new Error("JSON inválido na resposta: " + raw.slice(0, 80));
+  }
 }
 
 // ─── MENSAGEM IA ──────────────────────────────────────────────────────────────
@@ -213,38 +253,114 @@ function CepInput({ value, onChange, onEnderecoFound }) {
 
 // ─── UPLOAD OCR ───────────────────────────────────────────────────────────────
 function DocUpload({ onExtracted }) {
-  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("idle"); // idle | loading | success | error
   const [result, setResult] = useState(null);
+  const [erro, setErro] = useState("");
+  const [nomeArquivo, setNomeArquivo] = useState("");
   const ref = useRef();
+
   const handle = async (e) => {
-    const file = e.target.files[0]; if (!file) return;
-    setLoading(true); setResult(null);
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Valida tamanho (máx 20MB)
+    if (file.size > 20 * 1024 * 1024) {
+      setErro("Arquivo muito grande. Máximo 20MB.");
+      setStatus("error");
+      return;
+    }
+
+    setStatus("loading");
+    setResult(null);
+    setErro("");
+    setNomeArquivo(file.name);
+
+    // Reseta o input para permitir enviar o mesmo arquivo novamente
+    e.target.value = "";
+
     const reader = new FileReader();
-    reader.onload = async (ev) => {
-      const b64 = ev.target.result.split(",")[1];
-      const d = await extrairDados(b64, file.type||"image/jpeg");
-      setResult(d); onExtracted(d); setLoading(false);
+
+    reader.onerror = () => {
+      setErro("Erro ao ler o arquivo. Tente novamente.");
+      setStatus("error");
     };
+
+    reader.onload = async (ev) => {
+      try {
+        const b64 = ev.target.result.split(",")[1];
+        if (!b64) throw new Error("Arquivo vazio ou corrompido.");
+
+        const dados = await extrairDados(b64, file.type, file.name);
+
+        // Verifica se extraiu ao menos um campo relevante
+        const temDados = Object.entries(dados).some(([k, v]) => v && k !== "tipo_documento");
+        if (!temDados) throw new Error("Não foi possível identificar dados no documento. Tente uma foto mais nítida.");
+
+        setResult(dados);
+        onExtracted(dados);
+        setStatus("success");
+      } catch (err) {
+        setErro(err.message || "Erro ao processar documento.");
+        setStatus("error");
+      }
+    };
+
     reader.readAsDataURL(file);
   };
+
+  const labelStatus = {
+    idle: { icon: "📄", text: "Enviar RG, CPF, CNH ou comprovante de residência", sub: "JPG, PNG, PDF · máx. 20MB" },
+    loading: { icon: "⏳", text: "Extraindo dados...", sub: nomeArquivo },
+    success: { icon: "✅", text: "Dados extraídos com sucesso!", sub: nomeArquivo },
+    error: { icon: "❌", text: "Tentar novamente", sub: "Clique para enviar outro arquivo" },
+  }[status];
+
   return (
     <div>
-      <div onClick={()=>ref.current.click()} style={{border:`2px dashed ${C.border}`,borderRadius:10,padding:"22px 16px",textAlign:"center",cursor:"pointer"}}>
-        <div style={{fontSize:24,marginBottom:6}}>📄</div>
-        <div style={{color:C.muted,fontSize:13,marginBottom:3}}>Enviar RG, CPF, CNH ou comprovante de residência</div>
-        <div style={{color:C.muted,fontSize:10,fontFamily:FM}}>JPG, PNG, PDF</div>
-        <input ref={ref} type="file" accept="image/*,.pdf" style={{display:"none"}} onChange={handle}/>
+      <div
+        onClick={() => ref.current.click()}
+        style={{
+          border: `2px dashed ${status === "error" ? C.danger : status === "success" ? C.success : C.border}`,
+          borderRadius: 10, padding: "18px 16px", textAlign: "center",
+          cursor: status === "loading" ? "wait" : "pointer",
+          background: status === "success" ? C.success + "0d" : status === "error" ? C.danger + "0d" : "transparent",
+          transition: "all 0.2s",
+        }}
+      >
+        <div style={{ fontSize: 22, marginBottom: 5 }}>{labelStatus.icon}</div>
+        <div style={{ color: status === "error" ? C.danger : status === "success" ? C.success : C.muted, fontSize: 13, marginBottom: 3 }}>
+          {labelStatus.text}
+        </div>
+        <div style={{ color: C.muted, fontSize: 10, fontFamily: FM }}>{labelStatus.sub}</div>
+        <input ref={ref} type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={handle} disabled={status === "loading"} />
       </div>
-      {loading && <Spin text="Extraindo dados..."/>}
-      {result && !loading && (
-        <div style={{marginTop:10,background:C.surface,borderRadius:8,padding:12}}>
-          <div style={{color:C.success,fontFamily:FM,fontSize:11,marginBottom:8}}>Dados extraídos automaticamente:</div>
-          {Object.entries(result).filter(([k,v])=>v&&k!=="tipo_documento").map(([k,v])=>(
-            <div key={k} style={{display:"flex",gap:8,marginBottom:4,fontSize:12}}>
-              <span style={{color:C.muted,fontFamily:FM,minWidth:130}}>{k}:</span>
-              <span>{v}</span>
+
+      {status === "loading" && <Spin text={`Analisando ${nomeArquivo}...`} />}
+
+      {status === "error" && (
+        <div style={{ marginTop: 8, background: C.danger + "18", border: `1px solid ${C.danger}44`, borderRadius: 8, padding: "10px 12px", color: C.danger, fontSize: 12, fontFamily: FM }}>
+          ⚠ {erro}
+        </div>
+      )}
+
+      {status === "success" && result && (
+        <div style={{ marginTop: 10, background: C.surface, borderRadius: 8, padding: 12 }}>
+          <div style={{ color: C.success, fontFamily: FM, fontSize: 11, marginBottom: 8 }}>
+            Campos preenchidos automaticamente:
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
+            {Object.entries(result).filter(([k, v]) => v && k !== "tipo_documento").map(([k, v]) => (
+              <div key={k} style={{ fontSize: 11, display: "flex", gap: 6, padding: "3px 0", borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ color: C.muted, fontFamily: FM, minWidth: 100, flexShrink: 0 }}>{k}:</span>
+                <span style={{ color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{String(v)}</span>
+              </div>
+            ))}
+          </div>
+          {result.tipo_documento && (
+            <div style={{ marginTop: 8, fontSize: 10, color: C.muted, fontFamily: FM }}>
+              Tipo detectado: {result.tipo_documento}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -309,35 +425,49 @@ function Timeline({ eventos=[], clienteId, onAdd, onDelete }) {
 }
 
 // ─── PARCELAS ─────────────────────────────────────────────────────────────────
+// Datas serializadas em parcelamentoDatas como JSON: {"0":"2026-01-15","1":"2026-02-15",...}
+function parseDatas(cliente) {
+  try { return JSON.parse(cliente.parcelamentoDatas || "{}"); } catch { return {}; }
+}
+function serializeDatas(datas) { return JSON.stringify(datas); }
+
 function Parcelas({ cliente, onChange }) {
   const total = Number(cliente.parcelamentoTotal)||1;
   const pagas = Number(cliente.parcelamentoPagas)||0;
   const vp = Number(cliente.parcelamentoValor)||0;
   const pct = (pagas/total)*100;
+  const datas = parseDatas(cliente);
   const vencidas = [];
   for (let i=0;i<total;i++) {
-    const dataVenc = cliente[`parcela_${i}_venc`] || "";
+    const dataVenc = datas[i] || "";
     const atrasada = dataVenc && dataVenc < hoje() && i >= pagas;
     vencidas.push({ n:i+1, venc:dataVenc, paga: i<pagas, atrasada });
   }
+  const onDataChange = (i, val) => {
+    const novas = {...datas, [i]: val};
+    onChange({...cliente, parcelamentoDatas: serializeDatas(novas)});
+  };
   return (
     <div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
         <div style={{flex:"1 1 130px"}}>
           <label style={S.lbl}>Honorários (R$)</label>
-          <input style={S.inp} type="number" value={cliente.valorHonorarios||""} onChange={e=>onChange({...cliente,valorHonorarios:e.target.value,parcelamentoValor:(Number(e.target.value)/(Number(cliente.parcelamentoTotal)||1)).toFixed(2)})}/>
+          <input style={S.inp} type="number" value={cliente.valorHonorarios||""} onChange={e=>onChange({...cliente,valorHonorarios:e.target.value})}/>
         </div>
         <div style={{flex:"1 1 100px"}}>
           <label style={S.lbl}>Parcelas</label>
-          <input style={S.inp} type="number" min={1} value={total} onChange={e=>onChange({...cliente,parcelamentoTotal:Number(e.target.value),parcelamentoValor:(Number(cliente.valorHonorarios)/Number(e.target.value)).toFixed(2)})}/>
+          <input style={S.inp} type="number" min={1} value={total} onChange={e=>onChange({...cliente,parcelamentoTotal:Number(e.target.value)})}/>
         </div>
         <div style={{flex:"1 1 100px"}}>
           <label style={S.lbl}>Pagas</label>
           <input style={S.inp} type="number" min={0} max={total} value={pagas} onChange={e=>onChange({...cliente,parcelamentoPagas:Number(e.target.value)})}/>
         </div>
-        <div style={{flex:"1 1 100px"}}>
+        <div style={{flex:"1 1 120px"}}>
           <label style={S.lbl}>Valor/Parcela</label>
-          <input style={S.inp} type="number" value={vp} onChange={e=>onChange({...cliente,parcelamentoValor:e.target.value})}/>
+          <div style={{display:"flex",gap:4,alignItems:"center"}}>
+            <input style={S.inp} type="number" value={vp||""} onChange={e=>onChange({...cliente,parcelamentoValor:e.target.value})} placeholder="Manual"/>
+            <button title="Calcular automaticamente (honorários ÷ parcelas)" onClick={()=>onChange({...cliente,parcelamentoValor:total>0?(Number(cliente.valorHonorarios)/total).toFixed(2):""})} style={{background:C.border,border:"none",borderRadius:6,color:C.muted,cursor:"pointer",padding:"4px 7px",fontSize:12,whiteSpace:"nowrap"}}>÷</button>
+          </div>
         </div>
       </div>
       <Prog pct={pct} color={pct===100?C.success:C.accent}/>
@@ -352,7 +482,7 @@ function Parcelas({ cliente, onChange }) {
             {vencidas.map(p=>(
               <div key={p.n} style={{background:p.paga?C.success+"22":p.atrasada?C.danger+"22":C.surface,border:`1px solid ${p.paga?C.success:p.atrasada?C.danger:C.border}`,borderRadius:7,padding:"4px 8px",display:"flex",flexDirection:"column",alignItems:"center",minWidth:70}}>
                 <span style={{fontSize:10,fontFamily:FM,color:p.paga?C.success:p.atrasada?C.danger:C.muted}}>{p.paga?"✓ Paga":p.atrasada?"Atrasada":`${p.n}ª`}</span>
-                <input type="date" value={cliente[`parcela_${p.n-1}_venc`]||""} onChange={e=>onChange({...cliente,[`parcela_${p.n-1}_venc`]:e.target.value})} style={{border:"none",background:"transparent",color:C.text,fontSize:10,fontFamily:FM,width:95,marginTop:2}}/>
+                <input type="date" value={datas[p.n-1]||""} onChange={e=>onDataChange(p.n-1, e.target.value)} style={{border:"none",background:"transparent",color:C.text,fontSize:10,fontFamily:FM,width:95,marginTop:2}}/>
               </div>
             ))}
           </div>
@@ -746,8 +876,8 @@ function NovoCliente({ onSave, onCancel }) {
           <F label="Telefone"><input style={S.inp} value={form.telefone} onChange={e=>setForm({...form,telefone:e.target.value})} placeholder="(96) 99000-0000"/></F>
           <F label="Benefício"><select style={S.sel} value={form.beneficio} onChange={e=>setForm({...form,beneficio:e.target.value})}>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></F>
           <F label="Nº Benefício/NB"><input style={S.inp} value={form.numeroBeneficio} onChange={e=>setForm({...form,numeroBeneficio:e.target.value})}/></F>
-          <F label="Honorários (R$)"><input style={S.inp} type="number" value={form.valorHonorarios} onChange={e=>setForm({...form,valorHonorarios:e.target.value,parcelamentoValor:(Number(e.target.value)/Number(form.parcelamentoTotal||1)).toFixed(2)})}/></F>
-          <F label="Parcelas"><input style={S.inp} type="number" min={1} value={form.parcelamentoTotal} onChange={e=>setForm({...form,parcelamentoTotal:Number(e.target.value),parcelamentoValor:(Number(form.valorHonorarios)/Number(e.target.value)).toFixed(2)})}/></F>
+          <F label="Honorários (R$)"><input style={S.inp} type="number" value={form.valorHonorarios} onChange={e=>setForm({...form,valorHonorarios:e.target.value})}/></F>
+          <F label="Parcelas"><input style={S.inp} type="number" min={1} value={form.parcelamentoTotal} onChange={e=>setForm({...form,parcelamentoTotal:Number(e.target.value)})}/></F>
         </div>
         <F label="CEP"><CepInput value={form.cep} onChange={v=>setForm({...form,cep:v})} onEnderecoFound={e=>setForm(p=>({...p,endereco:e}))}/></F>
         <F label="Endereço"><input style={S.inp} value={form.endereco} onChange={e=>setForm({...form,endereco:e.target.value})}/></F>
@@ -1009,21 +1139,33 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const syncTimer = useRef(null);
 
+  // Merge: mantém registros locais que ainda não chegaram ao Sheets
+  const mergeWithLocal = useCallback((remoto, local) => {
+    const idsRemoto = new Set(remoto.map(x => String(x.id)));
+    // Itens locais que o Sheets ainda não confirmou ficam preservados
+    const apenasLocal = local.filter(x => !idsRemoto.has(String(x.id)));
+    // Para itens que já existem nos dois, prevalece o Sheets (fonte da verdade)
+    return [...remoto, ...apenasLocal];
+  }, []);
+
   // Carrega dados do Sheets
   const loadData = useCallback(async () => {
     setSyncStatus("syncing");
     try {
       const d = await api.getAll();
-      setClients(d.clientes||[]);
-      setLeads(d.leads||[]);
-      setTarefas(d.tarefas||[]);
-      setFollowUps(d.followups||[]);
-      setMensagens(d.mensagens||[]);
-      // timeline vem junto com tarefas ou como campo separado
-      if (d.timeline) setTimeline(d.timeline);
+
+      // Usa o setter funcional para acessar o estado atual e fazer o merge
+      setClients(prev => mergeWithLocal(d.clientes || [], prev));
+      setLeads(prev => mergeWithLocal(d.leads || [], prev));
+      setTarefas(prev => mergeWithLocal(d.tarefas || [], prev));
+      setFollowUps(prev => mergeWithLocal(d.followups || [], prev));
+      setMensagens(prev => mergeWithLocal(d.mensagens || [], prev));
+      if (d.timeline) setTimeline(prev => mergeWithLocal(d.timeline, prev));
+
       setSyncStatus("ok");
       setLastSync(new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}));
-      // Processa fila offline
+
+      // Processa fila offline: reenvia tudo que ficou pendente
       const queue = offlineQueue.get();
       if (queue.length > 0) {
         for (const op of queue) {
@@ -1036,7 +1178,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [mergeWithLocal]);
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -1048,19 +1190,33 @@ export default function App() {
     return () => clearInterval(syncTimer.current);
   }, [loadData]);
 
-  // Operações CRUD com fallback offline
+  // Operações CRUD com retry e fallback offline
   const persist = async (entity, data, setFn) => {
+    // 1. Atualiza estado local imediatamente (optimistic update)
     setFn(prev => {
       const exists = prev.find(x => String(x.id) === String(data.id));
       return exists ? prev.map(x => String(x.id) === String(data.id) ? data : x) : [...prev, data];
     });
-    try {
-      await api.upsert(entity, data);
-      setSyncStatus("ok");
-    } catch {
-      offlineQueue.add({ entity, data });
-      setSyncStatus("offline");
+
+    // 2. Tenta enviar ao Sheets com 1 retry automático
+    let tentativas = 0;
+    while (tentativas < 2) {
+      try {
+        await api.upsert(entity, data);
+        setSyncStatus("ok");
+        return; // sucesso, sai do loop
+      } catch {
+        tentativas++;
+        if (tentativas < 2) {
+          // Aguarda 2s antes de tentar de novo
+          await new Promise(res => setTimeout(res, 2000));
+        }
+      }
     }
+
+    // 3. Após 2 tentativas falhas, coloca na fila offline
+    offlineQueue.add({ entity, data });
+    setSyncStatus("offline");
   };
 
   const remove = async (entity, id, setFn) => {
