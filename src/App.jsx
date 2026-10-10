@@ -66,10 +66,30 @@ const offlineQueue = {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function uid() { return Date.now() + Math.random().toString(36).slice(2, 7); }
-function fmtDate(iso) { if (!iso) return ""; const [y,m,d] = String(iso).split("-"); return `${d}/${m}/${y}`; }
+function fmtDate(iso) { if (!iso) return ""; const [y,m,d] = diaISO(iso).split("-"); return `${d}/${m}/${y}`; }
 function fmtCur(v) { return new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(Number(v)||0); }
 function calcIdade(n) { if (!n) return ""; const h=new Date(),d=new Date(n); let a=h.getFullYear()-d.getFullYear(); if(h.getMonth()-d.getMonth()<0||(h.getMonth()===d.getMonth()&&h.getDate()<d.getDate()))a--; return a; }
-function hoje() { return new Date().toISOString().split("T")[0]; }
+function isoLocal(d) { const z=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`; }
+function hoje() { return isoLocal(new Date()); }
+// Normaliza datas vindas da planilha: "2026-05-29", "2026-05-29T03:00:00.000Z" ou "29/05/2026" viram "2026-05-29"
+function diaISO(v) {
+  if (!v) return "";
+  const s = String(v).trim();
+  const br = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (br) return `${br[3]}-${br[2]}-${br[1]}`;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) { const d=new Date(s); if (!isNaN(d)) return isoLocal(d); }
+  return s.slice(0,10);
+}
+const PERIODOS = [["","Todo o período"],["hoje","Hoje"],["7d","Últimos 7 dias"],["mes","Este mês"],["ano","Este ano"],["custom","Datas selecionadas"]];
+function intervaloPeriodo(periodo, ini, fim) {
+  const h = new Date();
+  if (periodo==="hoje") return [hoje(), hoje()];
+  if (periodo==="7d") { const d=new Date(h); d.setDate(d.getDate()-6); return [isoLocal(d), hoje()]; }
+  if (periodo==="mes") return [isoLocal(new Date(h.getFullYear(),h.getMonth(),1)), hoje()];
+  if (periodo==="ano") return [`${h.getFullYear()}-01-01`, hoje()];
+  if (periodo==="custom") return [ini||"0000-00-00", fim||"9999-12-31"];
+  return null;
+}
 
 // ─── DOCUMENTOS ───────────────────────────────────────────────────────────────
 function gerarDoc(tipo, c) {
@@ -115,9 +135,8 @@ async function extrairDados(base64, mediaType, fileName) {
     : { type: "image",    source: { type: "base64", media_type: mt, data: base64 } };
 
   const headers = { "Content-Type": "application/json" };
-  if (isPDF) headers["anthropic-beta"] = "pdfs-2024-09-25";
 
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await fetch("/api/claude", {
     method: "POST",
     headers,
     body: JSON.stringify({
@@ -151,7 +170,7 @@ async function extrairDados(base64, mediaType, fileName) {
 // ─── MENSAGEM IA ──────────────────────────────────────────────────────────────
 async function gerarMsgIA(cliente, tipo) {
   const map = { protocolo:"informar que o processo foi protocolado no INSS", pericia:"informar que a perícia médica foi agendada e orientar sobre o que levar", resultado:"informar que houve movimentação no processo", aprovado:"parabenizar pelo deferimento do benefício", recurso:"informar que foi necessário interpor recurso e explicar os próximos passos" };
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await fetch("/api/claude", {
     method:"POST", headers:{"Content-Type":"application/json"},
     body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:300, messages:[{ role:"user", content:`Mensagem curta profissional para WhatsApp para ${map[tipo]} ao cliente ${cliente.nome.split(" ")[0]}, processo de ${cliente.beneficio}. Tom acolhedor, máximo 5 linhas. Assine "Yalley Vasconcelos, Advogado". Sem travessão.` }] })
   });
@@ -504,7 +523,7 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
   const lAtivos = leads.filter(l=>l.status!=="Convertido"&&l.status!=="Perdido").length;
   const lQuentes = leads.filter(l=>l.temperatura==="🔥 Quente"&&l.status!=="Convertido"&&l.status!=="Perdido").length;
   const pendentes = tarefas.filter(t=>!t.concluida&&t.prazo<hoje()).length;
-  const recentes = [...clients].sort((a,b)=>b.dataCadastro>a.dataCadastro?1:-1).slice(0,5);
+  const recentes = [...clients].sort((a,b)=>diaISO(b.dataCadastro).localeCompare(diaISO(a.dataCadastro))).slice(0,5);
   const tarefasUrgentes = tarefas.filter(t=>!t.concluida).sort((a,b)=>a.prazo>b.prazo?1:-1).slice(0,5);
 
   return (
@@ -596,16 +615,23 @@ function ClientesList({ clients, tarefas, onSelect, onNew }) {
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("");
   const [fBen, setFBen] = useState("");
+  const [fPer, setFPer] = useState("");
+  const [dIni, setDIni] = useState("");
+  const [dFim, setDFim] = useState("");
+  const intervalo = intervaloPeriodo(fPer, dIni, dFim);
 
   const filtered = clients.filter(c=>{
     const q=search.toLowerCase();
+    const dc=diaISO(c.dataCadastro);
     return (!q||c.nome?.toLowerCase().includes(q)||String(c.cpf).includes(q)||String(c.telefone).includes(q)||String(c.numeroBeneficio||"").includes(q))
-      &&(!fStatus||c.status===fStatus)&&(!fBen||c.beneficio===fBen);
-  });
+      &&(!fStatus||c.status===fStatus)&&(!fBen||c.beneficio===fBen)
+      &&(!intervalo||(dc&&dc>=intervalo[0]&&dc<=intervalo[1]));
+  }).sort((a,b)=>diaISO(b.dataCadastro).localeCompare(diaISO(a.dataCadastro)));
+  const totalHon = filtered.reduce((t,c)=>t+(Number(c.valorHonorarios)||0),0);
 
   const exportCSV = () => {
     const header = ["Nome","CPF","Telefone","Benefício","Status","Honorários","Cadastro"].join(";");
-    const rows = filtered.map(c=>[c.nome,c.cpf,c.telefone,c.beneficio,c.status,c.valorHonorarios,c.dataCadastro].join(";"));
+    const rows = filtered.map(c=>[c.nome,c.cpf,c.telefone,c.beneficio,c.status,c.valorHonorarios,fmtDate(c.dataCadastro)].join(";"));
     const blob = new Blob([[header,...rows].join("\n")],{type:"text/csv;charset=utf-8"});
     const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="clientes.csv"; a.click();
   };
@@ -616,9 +642,28 @@ function ClientesList({ clients, tarefas, onSelect, onNew }) {
         <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Buscar</label><input style={S.inp} placeholder="Nome, CPF, telefone, NB..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
         <div style={{flex:"1 1 150px"}}><label style={S.lbl}>Status</label><select style={S.sel} value={fStatus} onChange={e=>setFStatus(e.target.value)}><option value="">Todos</option>{STATUS_CLI.map(s=><option key={s}>{s}</option>)}</select></div>
         <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Benefício</label><select style={S.sel} value={fBen} onChange={e=>setFBen(e.target.value)}><option value="">Todos</option>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></div>
+        <div style={{flex:"1 1 160px"}}><label style={S.lbl}>Contrato fechado em</label><select style={S.sel} value={fPer} onChange={e=>setFPer(e.target.value)}>{PERIODOS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
+        {fPer==="custom"&&<>
+          <div style={{flex:"1 1 140px"}}><label style={S.lbl}>De</label><input type="date" style={S.inp} value={dIni} onChange={e=>setDIni(e.target.value)}/></div>
+          <div style={{flex:"1 1 140px"}}><label style={S.lbl}>Até</label><input type="date" style={S.inp} value={dFim} onChange={e=>setDFim(e.target.value)}/></div>
+        </>}
         <button style={S.btn("ghost")} onClick={exportCSV}>↓ CSV</button>
         <button style={S.btn("primary")} onClick={onNew}>+ Novo Cliente</button>
       </div>
+      {intervalo&&<div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
+        <div style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
+          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Contratos fechados</div>
+          <div style={{fontSize:22,fontWeight:700,color:C.accent,fontFamily:FD}}>{filtered.length}</div>
+        </div>
+        <div style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
+          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Honorários contratados</div>
+          <div style={{fontSize:22,fontWeight:700,color:C.success,fontFamily:FD}}>{fmtCur(totalHon)}</div>
+        </div>
+        <div style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
+          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Período</div>
+          <div style={{fontSize:13,fontWeight:600,marginTop:6}}>{fPer==="custom"?`${dIni?fmtDate(dIni):"início"} a ${dFim?fmtDate(dFim):"sem limite"}`:`${fmtDate(intervalo[0])} a ${fmtDate(intervalo[1])}`}</div>
+        </div>
+      </div>}
       <div style={{fontSize:11,color:C.muted,fontFamily:FM,marginBottom:10}}>{filtered.length} cliente(s)</div>
       {filtered.length===0&&<div style={{textAlign:"center",padding:40,color:C.muted}}>Nenhum cliente encontrado.</div>}
       {filtered.map(c=>{
@@ -725,6 +770,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
             <F label="Número do Benefício/NB"><input style={S.inp} value={form.numeroBeneficio||""} onChange={e=>setForm({...form,numeroBeneficio:e.target.value})} placeholder="NB ou nº do processo"/></F>
             <F label="Benefício"><select style={S.sel} value={form.beneficio||""} onChange={e=>setForm({...form,beneficio:e.target.value})}>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></F>
             <F label="Status"><select style={S.sel} value={form.status||""} onChange={e=>setForm({...form,status:e.target.value})}>{STATUS_CLI.map(s=><option key={s}>{s}</option>)}</select></F>
+            <F label="Data do contrato"><input type="date" style={S.inp} value={diaISO(form.dataCadastro)} onChange={e=>setForm({...form,dataCadastro:e.target.value})}/></F>
           </div>
           <F label="CEP"><CepInput value={form.cep||""} onChange={v=>setForm({...form,cep:v})} onEnderecoFound={e=>setForm(p=>({...p,endereco:e}))}/></F>
           <F label="Endereço Completo"><input style={S.inp} value={form.endereco||""} onChange={e=>setForm({...form,endereco:e.target.value})}/></F>
