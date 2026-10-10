@@ -461,11 +461,14 @@ function lerParcelas(cliente) {
   for (let i=0;i<total;i++) {
     const r = raw[i];
     const o = (r && typeof r === "object") ? r : { venc: r || "" };
+    const pago = o.pago !== undefined ? !!o.pago : i < pagasLegado;
+    const temValor = o.valor !== undefined && o.valor !== "";
     lista.push({
       venc: diaISO(o.venc),
-      valor: o.valor !== undefined && o.valor !== "" ? o.valor : (vp ?? ""),
-      valorManual: o.valor !== undefined && o.valor !== "",
-      pago: o.pago !== undefined ? !!o.pago : i < pagasLegado,
+      // Parcela paga sem valor registrado (dados antigos) usa o valor padrão antigo
+      valor: temValor ? o.valor : (pago ? (vp ?? "") : ""),
+      valorManual: temValor || pago,
+      pago,
       dataPgto: diaISO(o.dataPgto),
       forma: o.forma || "",
       obs: o.obs || "",
@@ -479,11 +482,13 @@ function Parcelas({ cliente, onChange }) {
   const vp = Number(cliente.parcelamentoValor)||0;
   const lista = lerParcelas(cliente);
   const pagasN = lista.filter(p=>p.pago).length;
-  const recebido = lista.filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0);
-  const aReceber = lista.filter(p=>!p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0);
-  const somaParcelas = recebido + aReceber;
+  // Honorários são o valor fixo do contrato. Recebido = soma das parcelas pagas. A receber = honorários menos recebido.
   const hon = Number(cliente.valorHonorarios)||0;
-  const pct = somaParcelas>0 ? (recebido/somaParcelas)*100 : (pagasN/total)*100;
+  const recebido = lista.filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0);
+  const aReceber = Math.max(hon - recebido, 0);
+  const restantes = total - pagasN;
+  const sugestao = restantes>0 && aReceber>0 ? Math.round((aReceber/restantes)*100)/100 : 0;
+  const pct = hon>0 ? Math.min((recebido/hon)*100,100) : (pagasN/total)*100;
   const proxima = lista.map((p,i)=>({...p,n:i+1})).find(p=>!p.pago);
 
   // Grava a lista no cliente, mantendo "Pagas" sincronizado com as parcelas marcadas
@@ -495,11 +500,13 @@ function Parcelas({ cliente, onChange }) {
   const alterar = (i, campos) => gravar(lista.map((p,k)=>k===i?{...p,...campos}:p));
   const marcarPaga = (i) => {
     const p = lista[i];
-    alterar(i, p.pago ? { pago:false } : { pago:true, dataPgto: p.dataPgto || hoje() });
+    if (p.pago) return alterar(i, { pago:false });
+    const valor = p.valor !== "" && p.valor !== undefined ? p.valor : (sugestao ? String(sugestao) : "");
+    alterar(i, { pago:true, dataPgto: p.dataPgto || hoje(), valor, valorManual: valor!=="" });
   };
   const mudarTotal = (n) => {
     const nt = Math.max(1, Number(n)||1);
-    const nova = Array.from({length:nt},(_,i)=>lista[i]||{venc:"",valor:vp||"",valorManual:false,pago:false,dataPgto:"",forma:"",obs:""});
+    const nova = Array.from({length:nt},(_,i)=>lista[i]||{venc:"",valor:"",valorManual:false,pago:false,dataPgto:"",forma:"",obs:""});
     gravar(nova, { parcelamentoTotal: nt });
   };
   // Preenche os vencimentos seguintes, mês a mês, a partir da 1ª data
@@ -533,23 +540,19 @@ function Parcelas({ cliente, onChange }) {
           <label style={S.lbl}>Pagas</label>
           <input style={{...S.inp,opacity:0.7}} value={`${pagasN} de ${total}`} readOnly title="Marque cada parcela como paga abaixo"/>
         </div>
-        <div style={{flex:"1 1 120px"}}>
-          <label style={S.lbl}>Valor padrão/parcela</label>
-          <div style={{display:"flex",gap:4,alignItems:"center"}}>
-            <input style={S.inp} type="number" value={cliente.parcelamentoValor||""} onChange={e=>onChange({...cliente,parcelamentoValor:e.target.value})} placeholder="Manual"/>
-            <button title="Calcular automaticamente (honorários ÷ parcelas)" onClick={()=>onChange({...cliente,parcelamentoValor:total>0?(hon/total).toFixed(2):""})} style={{background:C.border,border:"none",borderRadius:6,color:C.muted,cursor:"pointer",padding:"4px 7px",fontSize:12,whiteSpace:"nowrap"}}>÷</button>
-          </div>
-        </div>
       </div>
 
       <Prog pct={pct} color={pct>=100?C.success:C.accent}/>
       <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6,fontSize:11,fontFamily:FM,marginTop:5,color:C.muted}}>
         <span style={{color:C.success}}>Recebido: {fmtCur(recebido)}</span>
-        {proxima&&<span>Próxima: {proxima.n}ª {proxima.venc?`em ${fmtDate(proxima.venc)}`:"sem data"} · {fmtCur(proxima.valor)}</span>}
+        {proxima&&<span>Próxima: {proxima.n}ª {proxima.venc?`em ${fmtDate(proxima.venc)}`:"sem data"}{sugestao?` · sugerido ${fmtCur(proxima.valor||sugestao)}`:""}</span>}
         <span style={{color:C.danger}}>A receber: {fmtCur(aReceber)}</span>
       </div>
-      {hon>0 && Math.abs(somaParcelas-hon)>0.01 && (
-        <div style={{marginTop:6,fontSize:11,color:C.warn,fontFamily:FM}}>Atenção: a soma das parcelas ({fmtCur(somaParcelas)}) é diferente dos honorários ({fmtCur(hon)}).</div>
+      {hon>0 && recebido-hon>0.01 && (
+        <div style={{marginTop:6,fontSize:11,color:C.warn,fontFamily:FM}}>Atenção: o valor recebido ({fmtCur(recebido)}) passou dos honorários ({fmtCur(hon)}) em {fmtCur(recebido-hon)}.</div>
+      )}
+      {hon>0 && pagasN===total && aReceber>0.01 && (
+        <div style={{marginTop:6,fontSize:11,color:C.warn,fontFamily:FM}}>Atenção: todas as parcelas estão pagas, mas ainda faltam {fmtCur(aReceber)} para completar os honorários.</div>
       )}
 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:16,marginBottom:6,gap:8,flexWrap:"wrap"}}>
@@ -572,7 +575,7 @@ function Parcelas({ cliente, onChange }) {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
                 <div>
                   <label style={lblMini}>Valor (R$)</label>
-                  <input style={mini} type="number" value={p.valor??""} onChange={e=>alterar(i,{valor:e.target.value,valorManual:e.target.value!==""})}/>
+                  <input style={mini} type="number" value={p.valor??""} placeholder={!p.pago&&sugestao?String(sugestao):""} onChange={e=>alterar(i,{valor:e.target.value,valorManual:e.target.value!==""})}/>
                 </div>
                 <div>
                   <label style={lblMini}>Vencimento</label>
@@ -580,7 +583,7 @@ function Parcelas({ cliente, onChange }) {
                 </div>
                 <div>
                   <label style={lblMini}>Data do pagamento</label>
-                  <input style={mini} type="date" value={p.dataPgto||""} onChange={e=>alterar(i,{dataPgto:e.target.value, pago: e.target.value ? true : p.pago})}/>
+                  <input style={mini} type="date" value={p.dataPgto||""} onChange={e=>{ const d=e.target.value; const v=(d&&!p.pago&&(p.valor===""||p.valor===undefined)&&sugestao)?String(sugestao):p.valor; alterar(i,{dataPgto:d, pago: d ? true : p.pago, valor:v, valorManual: v!==""&&v!==undefined}); }}/>
                 </div>
                 <div>
                   <label style={lblMini}>Forma de pagamento</label>
