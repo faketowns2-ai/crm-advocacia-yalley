@@ -444,28 +444,80 @@ function Timeline({ eventos=[], clienteId, onAdd, onDelete }) {
 }
 
 // ─── PARCELAS ─────────────────────────────────────────────────────────────────
-// Datas serializadas em parcelamentoDatas como JSON: {"0":"2026-01-15","1":"2026-02-15",...}
+// Parcelas serializadas em parcelamentoDatas (JSON).
+// Formato atual: {"0":{"venc":"2026-01-15","valor":"1000","pago":true,"dataPgto":"2026-01-14","forma":"PIX","obs":""},...}
+// Formato antigo (só a data de vencimento) {"0":"2026-01-15"} continua sendo lido.
+const FORMAS_PGTO = ["PIX","Dinheiro","Transferência","Boleto","Cartão de crédito","Cartão de débito","Cheque","Desconto nos retroativos"];
 function parseDatas(cliente) {
-  try { return JSON.parse(cliente.parcelamentoDatas || "{}"); } catch { return {}; }
+  try { const d = JSON.parse(cliente.parcelamentoDatas || "{}"); return d && typeof d === "object" ? d : {}; } catch { return {}; }
 }
 function serializeDatas(datas) { return JSON.stringify(datas); }
+function lerParcelas(cliente) {
+  const total = Math.max(1, Number(cliente.parcelamentoTotal)||1);
+  const pagasLegado = Number(cliente.parcelamentoPagas)||0;
+  const vp = cliente.parcelamentoValor;
+  const raw = parseDatas(cliente);
+  const lista = [];
+  for (let i=0;i<total;i++) {
+    const r = raw[i];
+    const o = (r && typeof r === "object") ? r : { venc: r || "" };
+    lista.push({
+      venc: diaISO(o.venc),
+      valor: o.valor !== undefined && o.valor !== "" ? o.valor : (vp ?? ""),
+      valorManual: o.valor !== undefined && o.valor !== "",
+      pago: o.pago !== undefined ? !!o.pago : i < pagasLegado,
+      dataPgto: diaISO(o.dataPgto),
+      forma: o.forma || "",
+      obs: o.obs || "",
+    });
+  }
+  return lista;
+}
 
 function Parcelas({ cliente, onChange }) {
-  const total = Number(cliente.parcelamentoTotal)||1;
-  const pagas = Number(cliente.parcelamentoPagas)||0;
+  const total = Math.max(1, Number(cliente.parcelamentoTotal)||1);
   const vp = Number(cliente.parcelamentoValor)||0;
-  const pct = (pagas/total)*100;
-  const datas = parseDatas(cliente);
-  const vencidas = [];
-  for (let i=0;i<total;i++) {
-    const dataVenc = datas[i] || "";
-    const atrasada = dataVenc && dataVenc < hoje() && i >= pagas;
-    vencidas.push({ n:i+1, venc:dataVenc, paga: i<pagas, atrasada });
-  }
-  const onDataChange = (i, val) => {
-    const novas = {...datas, [i]: val};
-    onChange({...cliente, parcelamentoDatas: serializeDatas(novas)});
+  const lista = lerParcelas(cliente);
+  const pagasN = lista.filter(p=>p.pago).length;
+  const recebido = lista.filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0);
+  const aReceber = lista.filter(p=>!p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0);
+  const somaParcelas = recebido + aReceber;
+  const hon = Number(cliente.valorHonorarios)||0;
+  const pct = somaParcelas>0 ? (recebido/somaParcelas)*100 : (pagasN/total)*100;
+  const proxima = lista.map((p,i)=>({...p,n:i+1})).find(p=>!p.pago);
+
+  // Grava a lista no cliente, mantendo "Pagas" sincronizado com as parcelas marcadas
+  const gravar = (novaLista, extra={}) => {
+    const obj = {};
+    novaLista.forEach((p,i)=>{ obj[i] = { venc:p.venc||"", valor:p.valorManual?p.valor:"", pago:!!p.pago, dataPgto:p.dataPgto||"", forma:p.forma||"", obs:p.obs||"" }; });
+    onChange({ ...cliente, ...extra, parcelamentoDatas: serializeDatas(obj), parcelamentoPagas: novaLista.filter(p=>p.pago).length });
   };
+  const alterar = (i, campos) => gravar(lista.map((p,k)=>k===i?{...p,...campos}:p));
+  const marcarPaga = (i) => {
+    const p = lista[i];
+    alterar(i, p.pago ? { pago:false } : { pago:true, dataPgto: p.dataPgto || hoje() });
+  };
+  const mudarTotal = (n) => {
+    const nt = Math.max(1, Number(n)||1);
+    const nova = Array.from({length:nt},(_,i)=>lista[i]||{venc:"",valor:vp||"",valorManual:false,pago:false,dataPgto:"",forma:"",obs:""});
+    gravar(nova, { parcelamentoTotal: nt });
+  };
+  // Preenche os vencimentos seguintes, mês a mês, a partir da 1ª data
+  const repetirVencimentos = () => {
+    const base = lista[0]?.venc; if (!base) return;
+    const [y,m,d] = base.split("-").map(Number);
+    gravar(lista.map((p,i)=>{
+      if (i===0 || p.venc) return p;
+      const dt = new Date(y, m-1+i, 1);
+      const ult = new Date(dt.getFullYear(), dt.getMonth()+1, 0).getDate();
+      dt.setDate(Math.min(d, ult));
+      return {...p, venc: isoLocal(dt)};
+    }));
+  };
+
+  const mini = { ...S.inp, padding:"6px 8px", fontSize:12, width:"100%", minWidth:0, boxSizing:"border-box" };
+  const lblMini = { ...S.lbl, fontSize:9, marginBottom:3 };
+
   return (
     <div>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
@@ -475,38 +527,75 @@ function Parcelas({ cliente, onChange }) {
         </div>
         <div style={{flex:"1 1 100px"}}>
           <label style={S.lbl}>Parcelas</label>
-          <input style={S.inp} type="number" min={1} value={total} onChange={e=>onChange({...cliente,parcelamentoTotal:Number(e.target.value)})}/>
+          <input style={S.inp} type="number" min={1} value={total} onChange={e=>mudarTotal(e.target.value)}/>
         </div>
         <div style={{flex:"1 1 100px"}}>
           <label style={S.lbl}>Pagas</label>
-          <input style={S.inp} type="number" min={0} max={total} value={pagas} onChange={e=>onChange({...cliente,parcelamentoPagas:Number(e.target.value)})}/>
+          <input style={{...S.inp,opacity:0.7}} value={`${pagasN} de ${total}`} readOnly title="Marque cada parcela como paga abaixo"/>
         </div>
         <div style={{flex:"1 1 120px"}}>
-          <label style={S.lbl}>Valor/Parcela</label>
+          <label style={S.lbl}>Valor padrão/parcela</label>
           <div style={{display:"flex",gap:4,alignItems:"center"}}>
-            <input style={S.inp} type="number" value={vp||""} onChange={e=>onChange({...cliente,parcelamentoValor:e.target.value})} placeholder="Manual"/>
-            <button title="Calcular automaticamente (honorários ÷ parcelas)" onClick={()=>onChange({...cliente,parcelamentoValor:total>0?(Number(cliente.valorHonorarios)/total).toFixed(2):""})} style={{background:C.border,border:"none",borderRadius:6,color:C.muted,cursor:"pointer",padding:"4px 7px",fontSize:12,whiteSpace:"nowrap"}}>÷</button>
+            <input style={S.inp} type="number" value={cliente.parcelamentoValor||""} onChange={e=>onChange({...cliente,parcelamentoValor:e.target.value})} placeholder="Manual"/>
+            <button title="Calcular automaticamente (honorários ÷ parcelas)" onClick={()=>onChange({...cliente,parcelamentoValor:total>0?(hon/total).toFixed(2):""})} style={{background:C.border,border:"none",borderRadius:6,color:C.muted,cursor:"pointer",padding:"4px 7px",fontSize:12,whiteSpace:"nowrap"}}>÷</button>
           </div>
         </div>
       </div>
-      <Prog pct={pct} color={pct===100?C.success:C.accent}/>
-      <div style={{display:"flex",justifyContent:"space-between",fontSize:11,fontFamily:FM,marginTop:5,color:C.muted}}>
-        <span style={{color:C.success}}>Recebido: {fmtCur(pagas*vp)}</span>
-        <span style={{color:C.danger}}>A receber: {fmtCur((total-pagas)*vp)}</span>
+
+      <Prog pct={pct} color={pct>=100?C.success:C.accent}/>
+      <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6,fontSize:11,fontFamily:FM,marginTop:5,color:C.muted}}>
+        <span style={{color:C.success}}>Recebido: {fmtCur(recebido)}</span>
+        {proxima&&<span>Próxima: {proxima.n}ª {proxima.venc?`em ${fmtDate(proxima.venc)}`:"sem data"} · {fmtCur(proxima.valor)}</span>}
+        <span style={{color:C.danger}}>A receber: {fmtCur(aReceber)}</span>
       </div>
-      {total>1 && (
-        <div style={{marginTop:12}}>
-          <label style={S.lbl}>Datas de Vencimento</label>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
-            {vencidas.map(p=>(
-              <div key={p.n} style={{background:p.paga?C.success+"22":p.atrasada?C.danger+"22":C.surface,border:`1px solid ${p.paga?C.success:p.atrasada?C.danger:C.border}`,borderRadius:7,padding:"4px 8px",display:"flex",flexDirection:"column",alignItems:"center",minWidth:70}}>
-                <span style={{fontSize:10,fontFamily:FM,color:p.paga?C.success:p.atrasada?C.danger:C.muted}}>{p.paga?"✓ Paga":p.atrasada?"Atrasada":`${p.n}ª`}</span>
-                <input type="date" value={datas[p.n-1]||""} onChange={e=>onDataChange(p.n-1, e.target.value)} style={{border:"none",background:"transparent",color:C.text,fontSize:10,fontFamily:FM,width:95,marginTop:2}}/>
-              </div>
-            ))}
-          </div>
-        </div>
+      {hon>0 && Math.abs(somaParcelas-hon)>0.01 && (
+        <div style={{marginTop:6,fontSize:11,color:C.warn,fontFamily:FM}}>Atenção: a soma das parcelas ({fmtCur(somaParcelas)}) é diferente dos honorários ({fmtCur(hon)}).</div>
       )}
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:16,marginBottom:6,gap:8,flexWrap:"wrap"}}>
+        <label style={{...S.lbl,margin:0}}>Parcelas</label>
+        {total>1 && lista[0]?.venc && lista.some((p,i)=>i>0&&!p.venc) && (
+          <button style={{...S.btn("ghost"),padding:"4px 10px",fontSize:11}} onClick={repetirVencimentos}>Preencher vencimentos mês a mês</button>
+        )}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
+        {lista.map((p,i)=>{
+          const atrasada = !p.pago && p.venc && p.venc < hoje();
+          const cor = p.pago ? C.success : atrasada ? C.danger : C.border;
+          const rotulo = p.pago ? "✓ Paga" : atrasada ? "Atrasada" : "Em aberto";
+          return (
+            <div key={i} style={{background:p.pago?C.success+"14":atrasada?C.danger+"14":C.surface,border:`1px solid ${cor}`,borderRadius:10,padding:12,display:"flex",flexDirection:"column",gap:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontFamily:FD,fontSize:15,color:C.accentLight}}>{i+1}ª parcela</span>
+                <span style={{fontSize:10,fontFamily:FM,color:p.pago?C.success:atrasada?C.danger:C.muted}}>{rotulo}</span>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                <div>
+                  <label style={lblMini}>Valor (R$)</label>
+                  <input style={mini} type="number" value={p.valor??""} onChange={e=>alterar(i,{valor:e.target.value,valorManual:e.target.value!==""})}/>
+                </div>
+                <div>
+                  <label style={lblMini}>Vencimento</label>
+                  <input style={mini} type="date" value={p.venc||""} onChange={e=>alterar(i,{venc:e.target.value})}/>
+                </div>
+                <div>
+                  <label style={lblMini}>Data do pagamento</label>
+                  <input style={mini} type="date" value={p.dataPgto||""} onChange={e=>alterar(i,{dataPgto:e.target.value, pago: e.target.value ? true : p.pago})}/>
+                </div>
+                <div>
+                  <label style={lblMini}>Forma de pagamento</label>
+                  <select style={mini} value={p.forma||""} onChange={e=>alterar(i,{forma:e.target.value})}>
+                    <option value="">Selecione</option>
+                    {FORMAS_PGTO.map(f=><option key={f}>{f}</option>)}
+                  </select>
+                </div>
+              </div>
+              <input style={mini} placeholder="Observação (nº do comprovante, quem pagou...)" value={p.obs||""} onChange={e=>alterar(i,{obs:e.target.value})}/>
+              <button onClick={()=>marcarPaga(i)} style={{...S.btn(p.pago?"ghost":"success"),padding:"6px 10px",fontSize:12}}>{p.pago?"Desmarcar pagamento":"Marcar como paga"}</button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -519,7 +608,7 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
   const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)).length;
   const concedidos = clients.filter(c=>c.status==="Benefício concedido").length;
   const recTotal = clients.reduce((s,c)=>s+(Number(c.valorHonorarios)||0),0);
-  const recebido = clients.reduce((s,c)=>s+((Number(c.parcelamentoPagas)||0)*(Number(c.parcelamentoValor)||0)),0);
+  const recebido = clients.reduce((s,c)=>s+lerParcelas(c).filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0),0);
   const lAtivos = leads.filter(l=>l.status!=="Convertido"&&l.status!=="Perdido").length;
   const lQuentes = leads.filter(l=>l.temperatura==="🔥 Quente"&&l.status!=="Convertido"&&l.status!=="Perdido").length;
   const pendentes = tarefas.filter(t=>!t.concluida&&t.prazo<hoje()).length;
