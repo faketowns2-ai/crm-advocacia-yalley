@@ -182,14 +182,42 @@ async function extrairDados(base64, mediaType, fileName, instrucao = "", nomeCli
 }
 
 // ─── MENSAGEM IA ──────────────────────────────────────────────────────────────
-async function gerarMsgIA(cliente, tipo) {
-  const map = { protocolo:"informar que o processo foi protocolado no INSS", pericia:"informar que a perícia médica foi agendada e orientar sobre o que levar", resultado:"informar que houve movimentação no processo", aprovado:"parabenizar pelo deferimento do benefício", recurso:"informar que foi necessário interpor recurso e explicar os próximos passos" };
+const ASSINATURA = "Yalley Vasconcelos, Advogado";
+async function chamarIA(content, maxTokens) {
   const r = await fetch("/api/claude", {
     method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:300, messages:[{ role:"user", content:`Mensagem curta profissional para WhatsApp para ${map[tipo]} ao cliente ${cliente.nome.split(" ")[0]}, processo de ${cliente.beneficio}. Tom acolhedor, máximo 5 linhas. Assine "Yalley Vasconcelos, Advogado". Sem travessão.` }] })
+    body: JSON.stringify({ max_tokens: maxTokens, messages:[{ role:"user", content }] })
   });
-  const d = await r.json();
-  return d.content?.[0]?.text || "";
+  const d = await r.json().catch(()=>({}));
+  if (!r.ok || d.error) throw new Error(d.error?.message || `Erro ${r.status} na IA`);
+  return (d.content?.[0]?.text || "").replace(/\s[—–]\s/g, ", ").trim();
+}
+
+async function gerarMsgIA(cliente, tipo, orientacao = "") {
+  const map = { protocolo:"informar que o processo foi protocolado no INSS", pericia:"informar que a perícia médica foi agendada e orientar sobre o que levar", resultado:"informar que houve movimentação no processo", aprovado:"parabenizar pelo deferimento do benefício", recurso:"informar que foi necessário interpor recurso e explicar os próximos passos" };
+  let p = `Mensagem curta profissional para WhatsApp para ${map[tipo]} ao cliente ${String(cliente.nome||"").split(" ")[0]}, processo de ${cliente.beneficio}. Tom acolhedor, máximo 5 linhas. Assine "${ASSINATURA}". Não use travessão.`;
+  if (orientacao.trim()) p += `\n\nOrientação do advogado (siga com prioridade): ${orientacao.trim()}`;
+  return chamarIA(p, 400);
+}
+
+// Lê um documento (decisão, carta de exigência, sentença, extrato...) e gera um resumo simples para o cliente
+async function gerarMsgDocumento(cliente, base64, mediaType, fileName, orientacao = "") {
+  const mt = normalizarMediaType(mediaType, fileName);
+  const bloco = mt === "application/pdf"
+    ? { type:"document", source:{ type:"base64", media_type:"application/pdf", data: base64 } }
+    : { type:"image", source:{ type:"base64", media_type: mt, data: base64 } };
+  let p = `Você é o assistente do advogado previdenciário ${ASSINATURA}. Leia o documento anexo (pode ser decisão do INSS, carta de exigência, comunicado, sentença, despacho, extrato ou outro) e escreva uma mensagem de WhatsApp para o cliente ${String(cliente.nome||"").split(" ")[0]}, cujo processo é de ${cliente.beneficio||"benefício previdenciário"}.
+
+Regras:
+1. Linguagem simples, como se explicasse para alguém sem estudo jurídico. Nada de juridiquês; se precisar de um termo técnico, explique entre parênteses.
+2. Estrutura: o que aconteceu; o que isso significa para o cliente; o que ele precisa fazer (se precisar) e até quando; próximo passo do escritório.
+3. Destaque datas, prazos e valores exatamente como estão no documento. Não invente nada que não esteja no documento; se algo estiver ilegível, diga que o escritório vai confirmar.
+4. Se for notícia ruim (indeferimento, exigência), tom tranquilizador e mostre o caminho (recurso, cumprir exigência etc.).
+5. Máximo de 10 linhas curtas. Pode usar no máximo 2 emojis. Não use travessão.
+6. Termine com a assinatura "${ASSINATURA}".
+Responda apenas com o texto da mensagem.`;
+  if (orientacao.trim()) p += `\n\nOrientação do advogado (siga com prioridade): ${orientacao.trim()}`;
+  return chamarIA([bloco, { type:"text", text:p }], 900);
 }
 
 // ─── CEP ──────────────────────────────────────────────────────────────────────
@@ -307,7 +335,7 @@ function DocUpload({ onExtracted, atual = {} }) {
   const handle = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 20 * 1024 * 1024) { setErro("Arquivo muito grande. Máximo 20MB."); setStatus("error"); return; }
+    if (file.size > 3 * 1024 * 1024) { setErro("Arquivo muito grande. Máximo 3MB (limite do servidor). Tire uma foto ou envie só as páginas principais."); setStatus("error"); return; }
 
     setStatus("loading"); setResult(null); setErro(""); setNomeArquivo(file.name);
     e.target.value = "";
@@ -355,7 +383,7 @@ function DocUpload({ onExtracted, atual = {} }) {
   };
 
   const labelStatus = {
-    idle: { icon: "📄", text: "Enviar RG, CPF, CNH ou comprovante de residência", sub: "JPG, PNG, PDF · máx. 20MB" },
+    idle: { icon: "📄", text: "Enviar RG, CPF, CNH ou comprovante de residência", sub: "JPG, PNG, PDF · máx. 3MB" },
     loading: { icon: "⏳", text: "Extraindo dados...", sub: nomeArquivo },
     review: { icon: "🔎", text: "Confira os dados antes de aplicar", sub: nomeArquivo },
     success: { icon: "✅", text: `${aplicados} campo(s) aplicado(s). Clique para enviar outro`, sub: nomeArquivo },
@@ -854,7 +882,26 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
   const gerarDoc = () => setDocText(gerarDoc_(docTipo, form));
   function gerarDoc_(t, c) { return gerarDoc(t, c); }
 
-  const gerarMsg = async () => { setMsgLoading(true); const t=await gerarMsgIA(form,msgTipo); setMsgText(t); setMsgLoading(false); };
+  const [msgOrient, setMsgOrient] = useState("");
+  const [msgArquivo, setMsgArquivo] = useState(null);
+  const [msgErro, setMsgErro] = useState("");
+  const msgFileRef = useRef();
+  const gerarMsg = async () => {
+    setMsgErro("");
+    if (msgTipo==="documento" && !msgArquivo) { setMsgErro("Escolha o arquivo do documento primeiro."); return; }
+    setMsgLoading(true);
+    try {
+      let t;
+      if (msgTipo==="documento") {
+        const b64 = await new Promise((ok,ko)=>{ const fr=new FileReader(); fr.onload=e=>ok(String(e.target.result).split(",")[1]); fr.onerror=()=>ko(new Error("Erro ao ler o arquivo")); fr.readAsDataURL(msgArquivo); });
+        t = await gerarMsgDocumento(form, b64, msgArquivo.type, msgArquivo.name, msgOrient);
+      } else {
+        t = await gerarMsgIA(form, msgTipo, msgOrient);
+      }
+      setMsgText(t);
+    } catch (e) { setMsgErro(e.message || "Erro ao gerar a mensagem"); }
+    setMsgLoading(false);
+  };
 
   const wpp = (t) => { const n=form.telefone.replace(/\D/g,""); window.open(`https://wa.me/55${n}?text=${encodeURIComponent(t)}`,"_blank"); };
 
@@ -996,11 +1043,25 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
                   <option value="resultado">Movimentação Processual</option>
                   <option value="aprovado">Benefício Concedido</option>
                   <option value="recurso">Recurso Interposto</option>
+                  <option value="documento">📎 Resumir um documento para o cliente</option>
                 </select>
               </div>
               <div style={{display:"flex",alignItems:"flex-end"}}><button style={S.btn("info")} onClick={gerarMsg} disabled={msgLoading}>{msgLoading?"Gerando...":"Gerar"}</button></div>
             </div>
-            {msgLoading&&<Spin text="Redigindo mensagem..."/>}
+            {msgTipo==="documento"&&(
+              <div onClick={()=>!msgLoading&&msgFileRef.current.click()} style={{border:`2px dashed ${msgArquivo?C.success:C.border}`,borderRadius:10,padding:"14px 16px",textAlign:"center",cursor:"pointer",marginBottom:10,background:msgArquivo?C.success+"0d":"transparent"}}>
+                <div style={{fontSize:20,marginBottom:4}}>{msgArquivo?"✅":"📎"}</div>
+                <div style={{fontSize:13,color:msgArquivo?C.success:C.muted}}>{msgArquivo?msgArquivo.name:"Enviar decisão, carta de exigência, sentença, extrato..."}</div>
+                <div style={{fontSize:10,color:C.muted,fontFamily:FM}}>{msgArquivo?"Clique para trocar o arquivo":"PDF, JPG ou PNG · máx. 3MB"}</div>
+                <input ref={msgFileRef} type="file" accept="image/*,.pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files[0]; e.target.value=""; if(!f) return; if(f.size>3*1024*1024){ setMsgErro("Arquivo muito grande. Máximo 3MB (limite do servidor). Tire uma foto ou envie só as páginas principais."); return; } setMsgErro(""); setMsgArquivo(f); }}/>
+              </div>
+            )}
+            <div style={{marginBottom:10}}>
+              <label style={S.lbl}>Orientação para a IA (opcional)</label>
+              <textarea style={{...S.textarea,minHeight:44,fontSize:12}} value={msgOrient} onChange={e=>setMsgOrient(e.target.value)} placeholder={msgTipo==="documento"?"Ex.: explique que vamos recorrer e que ela não precisa ir ao INSS":"Ex.: avise que a perícia é dia 20/10 às 8h na APS Centro"}/>
+            </div>
+            {msgErro&&<div style={{marginBottom:10,background:C.danger+"18",border:`1px solid ${C.danger}44`,borderRadius:8,padding:"8px 12px",color:C.danger,fontSize:12,fontFamily:FM}}>⚠ {msgErro}</div>}
+            {msgLoading&&<Spin text={msgTipo==="documento"?"Lendo o documento e redigindo...":"Redigindo mensagem..."}/>}
             {msgText&&(
               <div>
                 <textarea style={{...S.textarea,minHeight:120}} value={msgText} onChange={e=>setMsgText(e.target.value)}/>
