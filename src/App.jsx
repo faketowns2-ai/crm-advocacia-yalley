@@ -221,6 +221,29 @@ Responda apenas com o texto da mensagem.`;
   return chamarIA([bloco, { type:"text", text:p }], 900);
 }
 
+// ─── WHATSAPP WEB ─────────────────────────────────────────────────────────────
+// Normaliza o telefone para o formato internacional (55 + DDD + número)
+function telWhats(tel) {
+  let n = String(tel||"").replace(/\D/g,"").replace(/^0+/,"");
+  if (n.length===10 || n.length===11) n = "55"+n;
+  return n.length>=12 && n.length<=13 ? n : "";
+}
+// Abre o WhatsApp Web com a conversa e a mensagem prontas, sempre na mesma aba
+function abrirWhatsApp(tel, texto="") {
+  const n = telWhats(tel);
+  if (!n) { alertaWhats(); return false; }
+  const url = `https://web.whatsapp.com/send?phone=${n}${texto?`&text=${encodeURIComponent(texto)}`:""}`;
+  const w = window.open(url, "whatsapp_crm");
+  if (w) w.focus();
+  return true;
+}
+function alertaWhats() {
+  const d = document.createElement("div");
+  d.textContent = "Telefone do cliente inválido ou vazio. Corrija na aba Dados (DDD + número).";
+  Object.assign(d.style,{position:"fixed",bottom:"20px",left:"50%",transform:"translateX(-50%)",background:"#e05c5c",color:"#fff",padding:"10px 16px",borderRadius:"8px",fontSize:"13px",zIndex:9999,fontFamily:"sans-serif"});
+  document.body.appendChild(d); setTimeout(()=>d.remove(),4000);
+}
+
 // ─── CEP ──────────────────────────────────────────────────────────────────────
 async function buscarCEP(cep) {
   try {
@@ -888,6 +911,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
   const [msgErro, setMsgErro] = useState("");
   const msgFileRef = useRef();
   const [msgDrag, setMsgDrag] = useState(false);
+  const [msgEnviada, setMsgEnviada] = useState(false);
   const escolherArquivoMsg = (f) => { if(!f) return; if(f.size>3*1024*1024){ setMsgErro("Arquivo muito grande. Máximo 3MB (limite do servidor). Tire uma foto ou envie só as páginas principais."); return; } setMsgErro(""); setMsgArquivo(f); };
   const gerarMsg = async () => {
     setMsgErro("");
@@ -907,7 +931,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
     setMsgLoading(false);
   };
 
-  const wpp = (t) => { const n=form.telefone.replace(/\D/g,""); window.open(`https://wa.me/55${n}?text=${encodeURIComponent(t)}`,"_blank"); };
+  const wpp = (t) => abrirWhatsApp(form.telefone, t);
 
   const addTarefa = () => {
     if (!novaTarefa.descricao) return;
@@ -1071,7 +1095,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
                 <textarea style={{...S.textarea,minHeight:120}} value={msgText} onChange={e=>setMsgText(e.target.value)}/>
                 <div style={{display:"flex",gap:8,marginTop:8,justifyContent:"flex-end"}}>
                   <button style={S.btn("ghost")} onClick={()=>navigator.clipboard.writeText(msgText)}>Copiar</button>
-                  <button style={S.btn("success")} onClick={()=>wpp(msgText)}>WhatsApp</button>
+                  <button style={S.btn("success")} onClick={()=>{ if(wpp(msgText)) { onSaveMensagem({id:uid(),clienteId:form.id,de:"escritorio",texto:msgText,data:hoje()}); setMsgEnviada(true); setTimeout(()=>setMsgEnviada(false),4000); } }}>{msgEnviada?"✓ Aberto no WhatsApp Web":"Enviar pelo WhatsApp Web"}</button>
                 </div>
               </div>
             )}
@@ -1081,7 +1105,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
             <div style={{marginBottom:12}}>
               <textarea style={{...S.textarea,minHeight:70}} value={novaMensagem} onChange={e=>setNovaMensagem(e.target.value)} placeholder="Registrar comunicação..."/>
               <div style={{display:"flex",gap:8,marginTop:8,justifyContent:"flex-end"}}>
-                <button style={S.btn("ghost")} onClick={()=>wpp(novaMensagem)}>WhatsApp</button>
+                <button style={S.btn("ghost")} onClick={()=>{ if(!novaMensagem.trim())return; if(wpp(novaMensagem)) { onSaveMensagem({id:uid(),clienteId:form.id,de:"escritorio",texto:novaMensagem,data:hoje()}); setNovaMensagem(""); } }}>Enviar pelo WhatsApp Web</button>
                 <button style={S.btn("primary")} onClick={()=>{ if(!novaMensagem.trim())return; onSaveMensagem({id:uid(),clienteId:form.id,de:"escritorio",texto:novaMensagem,data:hoje()}); setNovaMensagem(""); }}>Registrar</button>
               </div>
             </div>
@@ -1143,7 +1167,7 @@ function NovoCliente({ onSave, onCancel }) {
 // LEADS
 // ═══════════════════════════════════════════════════════════════════════════
 function LeadCard({ lead, onClick, onConvert }) {
-  const wpp = (e) => { e.stopPropagation(); const n=lead.telefone.replace(/\D/g,""); window.open(`https://wa.me/55${n}`,"_blank"); };
+  const wpp = (e) => { e.stopPropagation(); abrirWhatsApp(lead.telefone); };
   return (
     <div onClick={onClick} style={{background:C.card,border:`1px solid ${tempColor[lead.temperatura]||C.border}`,borderLeft:`4px solid ${tempColor[lead.temperatura]||C.border}`,borderRadius:10,padding:12,cursor:"pointer",marginBottom:8}}>
       <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
@@ -1172,7 +1196,7 @@ function LeadDetalhe({ lead, followUps, onBack, onSave, onSaveFollowUp, onDelFol
   const [novoFU, setNovoFU] = useState({descricao:"",prazo:""});
   const meusFU = followUps.filter(f=>String(f.leadId)===String(lead.id));
   const save = async () => { setSaving(true); await onSave(form); setSaving(false); };
-  const wpp = (t) => { const n=form.telefone.replace(/\D/g,""); window.open(`https://wa.me/55${n}?text=${encodeURIComponent(t)}`,"_blank"); };
+  const wpp = (t) => abrirWhatsApp(form.telefone, t);
   const msgs = [
     {label:"Apresentação inicial", texto:`Olá ${form.nome?.split(" ")[0]}! Sou a Yalley Vasconcelos, advogada previdenciária em Macapá. Vi que você tem interesse em ${form.beneficioInteresse}. Posso te ajudar a conquistar esse benefício! Podemos conversar?`},
     {label:"Lembrete de retorno", texto:`Olá ${form.nome?.split(" ")[0]}! Passando para saber se você teve oportunidade de pensar sobre o ${form.beneficioInteresse}. Quando podemos conversar?`},
