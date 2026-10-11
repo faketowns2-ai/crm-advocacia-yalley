@@ -183,6 +183,7 @@ async function extrairDados(base64, mediaType, fileName, instrucao = "", nomeCli
 
 // ─── MENSAGEM IA ──────────────────────────────────────────────────────────────
 const ASSINATURA = "Yalley Vasconcelos, Advogado";
+const MSG_TIPOS = { protocolo:"Processo Protocolado", pericia:"Perícia Agendada", resultado:"Movimentação Processual", aprovado:"Benefício Concedido", recurso:"Recurso Interposto", documento:"📎 Só resumir o documento anexado" };
 async function chamarIA(content, maxTokens) {
   const r = await fetch("/api/claude", {
     method:"POST", headers:{"Content-Type":"application/json"},
@@ -886,15 +887,18 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
   const [msgArquivo, setMsgArquivo] = useState(null);
   const [msgErro, setMsgErro] = useState("");
   const msgFileRef = useRef();
+  const [msgDrag, setMsgDrag] = useState(false);
+  const escolherArquivoMsg = (f) => { if(!f) return; if(f.size>3*1024*1024){ setMsgErro("Arquivo muito grande. Máximo 3MB (limite do servidor). Tire uma foto ou envie só as páginas principais."); return; } setMsgErro(""); setMsgArquivo(f); };
   const gerarMsg = async () => {
     setMsgErro("");
-    if (msgTipo==="documento" && !msgArquivo) { setMsgErro("Escolha o arquivo do documento primeiro."); return; }
+    if (msgTipo==="documento" && !msgArquivo) { setMsgErro("Anexe o documento no quadro acima primeiro."); return; }
     setMsgLoading(true);
     try {
       let t;
-      if (msgTipo==="documento") {
+      if (msgArquivo) {
         const b64 = await new Promise((ok,ko)=>{ const fr=new FileReader(); fr.onload=e=>ok(String(e.target.result).split(",")[1]); fr.onerror=()=>ko(new Error("Erro ao ler o arquivo")); fr.readAsDataURL(msgArquivo); });
-        t = await gerarMsgDocumento(form, b64, msgArquivo.type, msgArquivo.name, msgOrient);
+        const contexto = msgTipo!=="documento" ? `Contexto escolhido pelo advogado: ${MSG_TIPOS[msgTipo]}. ` : "";
+        t = await gerarMsgDocumento(form, b64, msgArquivo.type, msgArquivo.name, contexto + msgOrient);
       } else {
         t = await gerarMsgIA(form, msgTipo, msgOrient);
       }
@@ -1038,30 +1042,30 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
               <div style={{flex:"1 1 200px"}}>
                 <label style={S.lbl}>Tipo</label>
                 <select style={S.sel} value={msgTipo} onChange={e=>setMsgTipo(e.target.value)}>
-                  <option value="protocolo">Processo Protocolado</option>
-                  <option value="pericia">Perícia Agendada</option>
-                  <option value="resultado">Movimentação Processual</option>
-                  <option value="aprovado">Benefício Concedido</option>
-                  <option value="recurso">Recurso Interposto</option>
-                  <option value="documento">📎 Resumir um documento para o cliente</option>
+                  {Object.entries(MSG_TIPOS).map(([v,l])=><option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
               <div style={{display:"flex",alignItems:"flex-end"}}><button style={S.btn("info")} onClick={gerarMsg} disabled={msgLoading}>{msgLoading?"Gerando...":"Gerar"}</button></div>
             </div>
-            {msgTipo==="documento"&&(
-              <div onClick={()=>!msgLoading&&msgFileRef.current.click()} style={{border:`2px dashed ${msgArquivo?C.success:C.border}`,borderRadius:10,padding:"14px 16px",textAlign:"center",cursor:"pointer",marginBottom:10,background:msgArquivo?C.success+"0d":"transparent"}}>
-                <div style={{fontSize:20,marginBottom:4}}>{msgArquivo?"✅":"📎"}</div>
-                <div style={{fontSize:13,color:msgArquivo?C.success:C.muted}}>{msgArquivo?msgArquivo.name:"Enviar decisão, carta de exigência, sentença, extrato..."}</div>
-                <div style={{fontSize:10,color:C.muted,fontFamily:FM}}>{msgArquivo?"Clique para trocar o arquivo":"PDF, JPG ou PNG · máx. 3MB"}</div>
-                <input ref={msgFileRef} type="file" accept="image/*,.pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files[0]; e.target.value=""; if(!f) return; if(f.size>3*1024*1024){ setMsgErro("Arquivo muito grande. Máximo 3MB (limite do servidor). Tire uma foto ou envie só as páginas principais."); return; } setMsgErro(""); setMsgArquivo(f); }}/>
-              </div>
-            )}
+            <label style={S.lbl}>Documento para resumir (opcional)</label>
+            <div
+              onClick={()=>!msgLoading&&msgFileRef.current.click()}
+              onDragOver={e=>{e.preventDefault();setMsgDrag(true);}}
+              onDragLeave={()=>setMsgDrag(false)}
+              onDrop={e=>{e.preventDefault();setMsgDrag(false);escolherArquivoMsg(e.dataTransfer.files[0]);}}
+              style={{border:`2px dashed ${msgDrag?C.accent:msgArquivo?C.success:C.border}`,borderRadius:10,padding:"18px 16px",textAlign:"center",cursor:"pointer",marginBottom:10,background:msgArquivo?C.success+"0d":msgDrag?C.accent+"0d":"transparent",transition:"all 0.2s"}}>
+              <div style={{fontSize:22,marginBottom:5}}>{msgArquivo?"✅":"📄"}</div>
+              <div style={{fontSize:13,color:msgArquivo?C.success:C.muted,marginBottom:3}}>{msgArquivo?msgArquivo.name:"Enviar decisão, carta de exigência, sentença, extrato ou outro documento"}</div>
+              <div style={{fontSize:10,color:C.muted,fontFamily:FM}}>{msgArquivo?"A mensagem será um resumo deste documento · clique para trocar":"JPG, PNG, PDF · máx. 3MB · clique ou arraste o arquivo"}</div>
+              <input ref={msgFileRef} type="file" accept="image/*,.pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files[0]; e.target.value=""; escolherArquivoMsg(f); }}/>
+            </div>
+            {msgArquivo&&<div style={{display:"flex",justifyContent:"flex-end",marginTop:-6,marginBottom:10}}><button type="button" onClick={()=>setMsgArquivo(null)} style={{background:"none",border:"none",color:C.danger,cursor:"pointer",fontSize:11,fontFamily:FM}}>✕ remover arquivo</button></div>}
             <div style={{marginBottom:10}}>
               <label style={S.lbl}>Orientação para a IA (opcional)</label>
-              <textarea style={{...S.textarea,minHeight:44,fontSize:12}} value={msgOrient} onChange={e=>setMsgOrient(e.target.value)} placeholder={msgTipo==="documento"?"Ex.: explique que vamos recorrer e que ela não precisa ir ao INSS":"Ex.: avise que a perícia é dia 20/10 às 8h na APS Centro"}/>
+              <textarea style={{...S.textarea,minHeight:44,fontSize:12}} value={msgOrient} onChange={e=>setMsgOrient(e.target.value)} placeholder={msgArquivo?"Ex.: explique que vamos recorrer e que ela não precisa ir ao INSS":"Ex.: avise que a perícia é dia 20/10 às 8h na APS Centro"}/>
             </div>
             {msgErro&&<div style={{marginBottom:10,background:C.danger+"18",border:`1px solid ${C.danger}44`,borderRadius:8,padding:"8px 12px",color:C.danger,fontSize:12,fontFamily:FM}}>⚠ {msgErro}</div>}
-            {msgLoading&&<Spin text={msgTipo==="documento"?"Lendo o documento e redigindo...":"Redigindo mensagem..."}/>}
+            {msgLoading&&<Spin text={msgArquivo?"Lendo o documento e redigindo...":"Redigindo mensagem..."}/>}
             {msgText&&(
               <div>
                 <textarea style={{...S.textarea,minHeight:120}} value={msgText} onChange={e=>setMsgText(e.target.value)}/>
