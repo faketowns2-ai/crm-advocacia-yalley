@@ -126,7 +126,21 @@ function normalizarMediaType(rawType, fileName) {
   return rawType;
 }
 
-async function extrairDados(base64, mediaType, fileName) {
+function montarPromptOCR(instrucao, nomeCliente) {
+  let t = `Analise este documento (RG, CPF, CNH, certidão ou comprovante de residência) e extraia os dados.
+Retorne APENAS JSON válido, sem markdown, sem texto extra:
+{"nome":"","cpf":"","rg":"","dataNascimento":"AAAA-MM-DD","endereco":"","nacionalidade":"","estadoCivil":"","profissao":"","cep":"","tipo_documento":"","titular_documento":""}
+Regras:
+1. Datas em AAAA-MM-DD. Campos não encontrados ficam como string vazia.
+2. "tipo_documento": RG, CPF, CNH, Certidão, Comprovante de residência ou Outro.
+3. "titular_documento": o nome da pessoa que aparece como titular no documento.
+4. Se for COMPROVANTE DE RESIDÊNCIA (conta de luz, água, telefone, internet, banco etc.), preencha SOMENTE "endereco", "cep", "tipo_documento" e "titular_documento". Deixe nome, cpf, rg, dataNascimento, estadoCivil, profissao e nacionalidade vazios, porque o comprovante pode estar em nome de terceiro.`;
+  if (nomeCliente) t += `\n5. O cliente cadastrado é: ${nomeCliente}. Se o titular do documento for outra pessoa, NÃO preencha nome, cpf, rg, dataNascimento, estadoCivil, profissao e nacionalidade.`;
+  if (instrucao && instrucao.trim()) t += `\n\nORIENTAÇÃO DO ADVOGADO (tem prioridade sobre as regras acima, exceto o formato JSON):\n${instrucao.trim()}`;
+  return t;
+}
+
+async function extrairDados(base64, mediaType, fileName, instrucao = "", nomeCliente = "") {
   const mt = normalizarMediaType(mediaType, fileName);
   const isPDF = mt === "application/pdf";
 
@@ -146,7 +160,7 @@ async function extrairDados(base64, mediaType, fileName) {
         role: "user",
         content: [
           contentBlock,
-          { type: "text", text: `Analise este documento (RG, CPF, CNH, certidão ou comprovante de residência) e extraia os dados da pessoa. Retorne APENAS JSON válido, sem markdown, sem texto extra:\n{"nome":"","cpf":"","rg":"","dataNascimento":"AAAA-MM-DD","endereco":"","nacionalidade":"","estadoCivil":"","profissao":"","cep":"","tipo_documento":""}\nDatas em AAAA-MM-DD. Campos não encontrados ficam como string vazia.` }
+          { type: "text", text: montarPromptOCR(instrucao, nomeCliente) }
         ]
       }]
     })
@@ -271,75 +285,99 @@ function CepInput({ value, onChange, onEnderecoFound }) {
 }
 
 // ─── UPLOAD OCR ───────────────────────────────────────────────────────────────
-function DocUpload({ onExtracted }) {
-  const [status, setStatus] = useState("idle"); // idle | loading | success | error
+const CAMPOS_OCR = { nome:"Nome", cpf:"CPF", rg:"RG", dataNascimento:"Nascimento", endereco:"Endereço", cep:"CEP", nacionalidade:"Nacionalidade", estadoCivil:"Estado civil", profissao:"Profissão" };
+const CAMPOS_PESSOAIS = ["nome","cpf","rg","dataNascimento","nacionalidade","estadoCivil","profissao"];
+const ATALHOS_OCR = [
+  "Comprovante em nome de terceiro: use só o endereço e o CEP",
+  "Não altere nome, CPF e RG",
+  "Este documento é do cônjuge: extraia só o nome dele para as observações, não altere os dados do cliente",
+];
+function normTxt(v) { return String(v||"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9]/gi,"").toLowerCase(); }
+
+function DocUpload({ onExtracted, atual = {} }) {
+  const [status, setStatus] = useState("idle"); // idle | loading | review | success | error
   const [result, setResult] = useState(null);
+  const [marcados, setMarcados] = useState({});
   const [erro, setErro] = useState("");
   const [nomeArquivo, setNomeArquivo] = useState("");
+  const [instrucao, setInstrucao] = useState("");
+  const [aplicados, setAplicados] = useState(0);
   const ref = useRef();
 
   const handle = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    if (file.size > 20 * 1024 * 1024) { setErro("Arquivo muito grande. Máximo 20MB."); setStatus("error"); return; }
 
-    // Valida tamanho (máx 20MB)
-    if (file.size > 20 * 1024 * 1024) {
-      setErro("Arquivo muito grande. Máximo 20MB.");
-      setStatus("error");
-      return;
-    }
-
-    setStatus("loading");
-    setResult(null);
-    setErro("");
-    setNomeArquivo(file.name);
-
-    // Reseta o input para permitir enviar o mesmo arquivo novamente
+    setStatus("loading"); setResult(null); setErro(""); setNomeArquivo(file.name);
     e.target.value = "";
 
     const reader = new FileReader();
-
-    reader.onerror = () => {
-      setErro("Erro ao ler o arquivo. Tente novamente.");
-      setStatus("error");
-    };
-
+    reader.onerror = () => { setErro("Erro ao ler o arquivo. Tente novamente."); setStatus("error"); };
     reader.onload = async (ev) => {
       try {
         const b64 = ev.target.result.split(",")[1];
         if (!b64) throw new Error("Arquivo vazio ou corrompido.");
-
-        const dados = await extrairDados(b64, file.type, file.name);
-
-        // Verifica se extraiu ao menos um campo relevante
-        const temDados = Object.entries(dados).some(([k, v]) => v && k !== "tipo_documento");
+        const dados = await extrairDados(b64, file.type, file.name, instrucao, atual.nome || "");
+        const temDados = Object.keys(CAMPOS_OCR).some(k => dados[k]);
         if (!temDados) throw new Error("Não foi possível identificar dados no documento. Tente uma foto mais nítida.");
 
-        setResult(dados);
-        onExtracted(dados);
-        setStatus("success");
+        // Pré-seleção segura: comprovante de residência ou documento de terceiro só traz endereço e CEP;
+        // campo já preenchido com valor diferente fica desmarcado para você decidir.
+        const comprovante = /comprovante|resid/i.test(dados.tipo_documento || "");
+        const titular = dados.titular_documento || dados.nome || "";
+        const terceiro = !!(atual.nome && titular && normTxt(titular) !== normTxt(atual.nome));
+        const sel = {};
+        Object.keys(CAMPOS_OCR).forEach(k => {
+          if (!dados[k]) return;
+          const pessoal = CAMPOS_PESSOAIS.includes(k);
+          const jaTem = atual[k] && normTxt(atual[k]) !== normTxt(dados[k]);
+          // Endereço e CEP sempre vêm marcados (são o objetivo do comprovante); dados pessoais só se forem do próprio cliente e não sobrescreverem algo diferente
+          sel[k] = pessoal ? (!comprovante && !terceiro && !jaTem) : true;
+        });
+        setResult({ ...dados, _comprovante: comprovante, _terceiro: terceiro, _titular: titular });
+        setMarcados(sel);
+        setStatus("review");
       } catch (err) {
         setErro(err.message || "Erro ao processar documento.");
         setStatus("error");
       }
     };
-
     reader.readAsDataURL(file);
+  };
+
+  const aplicar = () => {
+    const d = {};
+    Object.keys(marcados).forEach(k => { if (marcados[k] && result[k]) d[k] = result[k]; });
+    onExtracted(d);
+    setAplicados(Object.keys(d).length);
+    setStatus("success");
   };
 
   const labelStatus = {
     idle: { icon: "📄", text: "Enviar RG, CPF, CNH ou comprovante de residência", sub: "JPG, PNG, PDF · máx. 20MB" },
     loading: { icon: "⏳", text: "Extraindo dados...", sub: nomeArquivo },
-    success: { icon: "✅", text: "Dados extraídos com sucesso!", sub: nomeArquivo },
+    review: { icon: "🔎", text: "Confira os dados antes de aplicar", sub: nomeArquivo },
+    success: { icon: "✅", text: `${aplicados} campo(s) aplicado(s). Clique para enviar outro`, sub: nomeArquivo },
     error: { icon: "❌", text: "Tentar novamente", sub: "Clique para enviar outro arquivo" },
   }[status];
 
   return (
     <div>
+      <div style={{marginBottom:8}}>
+        <label style={S.lbl}>Orientação para a IA (opcional)</label>
+        <textarea style={{...S.inp,minHeight:46,resize:"vertical",fontSize:12}} value={instrucao} onChange={e=>setInstrucao(e.target.value)} placeholder="Ex.: o comprovante está em nome da mãe, use só o endereço"/>
+        <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5}}>
+          {ATALHOS_OCR.map(a=>(
+            <button key={a} type="button" onClick={()=>setInstrucao(a)} style={{background:instrucao===a?C.accent+"33":"transparent",border:`1px solid ${instrucao===a?C.accent:C.border}`,borderRadius:14,color:instrucao===a?C.accentLight:C.muted,fontSize:10,padding:"3px 9px",cursor:"pointer",fontFamily:FB}}>{a}</button>
+          ))}
+        </div>
+      </div>
+
       <div
-        onClick={() => ref.current.click()}
+        onClick={() => status !== "loading" && ref.current.click()}
         style={{
-          border: `2px dashed ${status === "error" ? C.danger : status === "success" ? C.success : C.border}`,
+          border: `2px dashed ${status === "error" ? C.danger : status === "success" ? C.success : status === "review" ? C.accent : C.border}`,
           borderRadius: 10, padding: "18px 16px", textAlign: "center",
           cursor: status === "loading" ? "wait" : "pointer",
           background: status === "success" ? C.success + "0d" : status === "error" ? C.danger + "0d" : "transparent",
@@ -347,9 +385,7 @@ function DocUpload({ onExtracted }) {
         }}
       >
         <div style={{ fontSize: 22, marginBottom: 5 }}>{labelStatus.icon}</div>
-        <div style={{ color: status === "error" ? C.danger : status === "success" ? C.success : C.muted, fontSize: 13, marginBottom: 3 }}>
-          {labelStatus.text}
-        </div>
+        <div style={{ color: status === "error" ? C.danger : status === "success" ? C.success : C.muted, fontSize: 13, marginBottom: 3 }}>{labelStatus.text}</div>
         <div style={{ color: C.muted, fontSize: 10, fontFamily: FM }}>{labelStatus.sub}</div>
         <input ref={ref} type="file" accept="image/*,.pdf" style={{ display: "none" }} onChange={handle} disabled={status === "loading"} />
       </div>
@@ -357,29 +393,38 @@ function DocUpload({ onExtracted }) {
       {status === "loading" && <Spin text={`Analisando ${nomeArquivo}...`} />}
 
       {status === "error" && (
-        <div style={{ marginTop: 8, background: C.danger + "18", border: `1px solid ${C.danger}44`, borderRadius: 8, padding: "10px 12px", color: C.danger, fontSize: 12, fontFamily: FM }}>
-          ⚠ {erro}
-        </div>
+        <div style={{ marginTop: 8, background: C.danger + "18", border: `1px solid ${C.danger}44`, borderRadius: 8, padding: "10px 12px", color: C.danger, fontSize: 12, fontFamily: FM }}>⚠ {erro}</div>
       )}
 
-      {status === "success" && result && (
-        <div style={{ marginTop: 10, background: C.surface, borderRadius: 8, padding: 12 }}>
-          <div style={{ color: C.success, fontFamily: FM, fontSize: 11, marginBottom: 8 }}>
-            Campos preenchidos automaticamente:
+      {status === "review" && result && (
+        <div style={{ marginTop: 10, background: C.surface, border:`1px solid ${C.accent}55`, borderRadius: 8, padding: 12 }}>
+          <div style={{ fontSize: 11, color: C.muted, fontFamily: FM, marginBottom: 6 }}>
+            Tipo: <b style={{color:C.text}}>{result.tipo_documento || "não identificado"}</b>
+            {result._titular && <> · Titular: <b style={{color:C.text}}>{result._titular}</b></>}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 12px" }}>
-            {Object.entries(result).filter(([k, v]) => v && k !== "tipo_documento").map(([k, v]) => (
-              <div key={k} style={{ fontSize: 11, display: "flex", gap: 6, padding: "3px 0", borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ color: C.muted, fontFamily: FM, minWidth: 100, flexShrink: 0 }}>{k}:</span>
-                <span style={{ color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{String(v)}</span>
-              </div>
-            ))}
-          </div>
-          {result.tipo_documento && (
-            <div style={{ marginTop: 8, fontSize: 10, color: C.muted, fontFamily: FM }}>
-              Tipo detectado: {result.tipo_documento}
+          {(result._comprovante || result._terceiro) && (
+            <div style={{ fontSize: 11, color: C.warn, marginBottom: 8 }}>
+              {result._terceiro ? "O documento parece ser de outra pessoa. " : "Comprovante de residência. "}Dados pessoais vieram desmarcados: só serão aplicados se você marcar.
             </div>
           )}
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>Marque o que deve ir para o cadastro:</div>
+          {Object.keys(CAMPOS_OCR).filter(k => result[k]).map(k => {
+            const mudou = atual[k] && normTxt(atual[k]) !== normTxt(result[k]);
+            return (
+              <label key={k} style={{ display:"flex", gap:8, alignItems:"flex-start", fontSize:12, padding:"5px 0", borderBottom:`1px solid ${C.border}`, cursor:"pointer" }}>
+                <input type="checkbox" checked={!!marcados[k]} onChange={e=>setMarcados({...marcados,[k]:e.target.checked})} style={{marginTop:2}}/>
+                <span style={{ color: C.muted, fontFamily: FM, minWidth: 95, flexShrink: 0 }}>{CAMPOS_OCR[k]}</span>
+                <span style={{ flex:1 }}>
+                  <span style={{ color: C.text }}>{String(result[k])}</span>
+                  {mudou && <span style={{ display:"block", color: C.warn, fontSize: 10, fontFamily: FM }}>atual: {String(atual[k])}</span>}
+                </span>
+              </label>
+            );
+          })}
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end", marginTop:10 }}>
+            <button type="button" style={S.btn("ghost")} onClick={()=>{ setStatus("idle"); setResult(null); }}>Descartar</button>
+            <button type="button" style={S.btn("primary")} onClick={aplicar} disabled={!Object.values(marcados).some(Boolean)}>Aplicar selecionados</button>
+          </div>
         </div>
       )}
     </div>
@@ -844,7 +889,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
         <div style={S.card}>
           <div style={S.cardTitle}>Dados Pessoais</div>
           <div style={{marginBottom:16}}>
-            <DocUpload onExtracted={d=>setForm(p=>({...p,...d}))}/>
+            <DocUpload atual={form} onExtracted={d=>setForm(p=>({...p,...d}))}/>
           </div>
           <div style={S.grid2}>
             <F label="Nome Completo"><input style={S.inp} value={form.nome||""} onChange={e=>setForm({...form,nome:e.target.value})}/></F>
@@ -1002,7 +1047,7 @@ function NovoCliente({ onSave, onCancel }) {
     <div style={S.modal}>
       <div style={S.modalBox}>
         <h3 style={{fontFamily:FD,color:C.accentLight,marginTop:0,marginBottom:16}}>Novo Cliente</h3>
-        <div style={{marginBottom:14}}><DocUpload onExtracted={d=>setForm(p=>({...p,...d}))}/></div>
+        <div style={{marginBottom:14}}><DocUpload atual={form} onExtracted={d=>setForm(p=>({...p,...d}))}/></div>
         <div style={S.grid2}>
           <F label="Nome *"><input style={S.inp} value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})}/></F>
           <F label="CPF *"><input style={S.inp} value={form.cpf} onChange={e=>setForm({...form,cpf:e.target.value})} placeholder="000.000.000-00"/></F>
