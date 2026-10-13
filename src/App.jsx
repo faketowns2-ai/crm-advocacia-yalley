@@ -1703,8 +1703,8 @@ export default function App() {
   const saveFollowUp = (f) => persist("Followup", f, setFollowUps);
   const delFollowUp = (id) => remove("Followup", id, setFollowUps);
   const saveMensagem = (m) => persist("Mensagem", m, setMensagens);
-  const saveTimeline = (e) => persist("Tarefa", {...e, _tipo:"timeline"}, setTimeline);
-  const delTimeline = (id) => remove("Tarefa", id, setTimeline);
+  const saveTimeline = (e) => persist("Timeline", e, setTimeline);
+  const delTimeline = (id) => remove("Timeline", id, setTimeline);
 
   const addClient = async (c) => {
     await saveCliente(c);
