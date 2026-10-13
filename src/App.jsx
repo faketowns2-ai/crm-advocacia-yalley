@@ -902,6 +902,130 @@ function Parcelas({ cliente, onChange }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════
+// ─── FATURAMENTO (card do topo do painel + gráfico por benefício) ─────────────
+const COR_RECEBIDO = "#a8862f";   // validado (contraste e daltonismo) contra o fundo escuro
+const COR_ARECEBER = "#3f7ab5";
+function Faturamento({ clients, onIr }) {
+  const [per, setPer] = useState("ano");
+  const [dIni, setDIni] = useState("");
+  const [dFim, setDFim] = useState("");
+  const [ben, setBen] = useState("");
+  const [hover, setHover] = useState(null);
+  const [tabela, setTabela] = useState(false);
+  const iv = intervaloPeriodo(per, dIni, dFim);
+  const noPeriodo = (d) => !iv || (d && d >= iv[0] && d <= iv[1]);
+
+  const doPeriodo = clients.filter(c => noPeriodo(diaISO(c.dataCadastro)));
+  const sel = doPeriodo.filter(c => !ben || c.beneficio === ben);
+  const contratado = sel.reduce((t,c)=>t+(Number(c.valorHonorarios)||0),0);
+  const recebidoContratos = sel.reduce((t,c)=>t+recebidoCli(c),0);
+  const aReceber = Math.max(contratado - recebidoContratos, 0);
+  // Dinheiro que entrou no período (pela data de pagamento das parcelas), de qualquer contrato
+  const entrou = clients.filter(c=>!ben||c.beneficio===ben).reduce((t,c)=>t+lerParcelas(c).filter(p=>p.pago && (iv ? noPeriodo(p.dataPgto) : true)).reduce((s,p)=>s+(Number(p.valor)||0),0),0);
+  const ticket = sel.length ? contratado / sel.length : 0;
+
+  // Agrupamento por benefício (contratos do período)
+  const mapa = {};
+  doPeriodo.forEach(c => {
+    const k = c.beneficio || "Sem benefício";
+    const m = mapa[k] || (mapa[k] = { nome:k, contratado:0, recebido:0, n:0 });
+    m.contratado += Number(c.valorHonorarios)||0; m.recebido += recebidoCli(c); m.n++;
+  });
+  let linhas = Object.values(mapa).sort((a,b)=>b.contratado-a.contratado);
+  if (linhas.length > 8) {
+    const resto = linhas.slice(7);
+    linhas = [...linhas.slice(0,7), resto.reduce((o,m)=>({ nome:`Outros (${resto.length})`, contratado:o.contratado+m.contratado, recebido:o.recebido+m.recebido, n:o.n+m.n, outros:true }), { contratado:0, recebido:0, n:0 })];
+  }
+  const max = Math.max(1, ...linhas.map(l=>l.contratado));
+  const totalPer = linhas.reduce((t,l)=>t+l.contratado,0) || 1;
+
+  const kpi = (rotulo, valor, sub, cor, ir) => (
+    <div className={ir?"card-click":""} onClick={ir?()=>onIr(...ir):undefined} style={{flex:"1 1 150px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",cursor:ir?"pointer":"default"}}>
+      <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>{rotulo}</div>
+      <div style={{fontSize:20,fontWeight:700,color:cor||C.text,fontFamily:FD,marginTop:2}}>{valor}</div>
+      {sub&&<div style={{fontSize:10,color:C.muted,fontFamily:FM}}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{...S.card,marginBottom:16,border:`1px solid ${C.accent}55`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:10,marginBottom:12}}>
+        <div>
+          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Faturamento {ben?`· ${ben}`:"· todos os benefícios"}</div>
+          <div style={{fontFamily:FD,fontSize:34,color:C.accentLight,lineHeight:1.1}}>{fmtCur(contratado)}</div>
+          <div style={{fontSize:11,color:C.muted,fontFamily:FM}}>honorários contratados {iv?`de ${fmtDate(iv[0])} a ${fmtDate(iv[1])}`:"em todo o período"} · {sel.length} contrato(s)</div>
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div><label style={S.lbl}>Período</label><select style={{...S.sel,minWidth:150}} value={per} onChange={e=>setPer(e.target.value)}>{PERIODOS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
+          {per==="custom"&&<>
+            <div><label style={S.lbl}>De</label><input type="date" style={S.inp} value={dIni} onChange={e=>setDIni(e.target.value)}/></div>
+            <div><label style={S.lbl}>Até</label><input type="date" style={S.inp} value={dFim} onChange={e=>setDFim(e.target.value)}/></div>
+          </>}
+          <div><label style={S.lbl}>Benefício</label><select style={{...S.sel,minWidth:180}} value={ben} onChange={e=>setBen(e.target.value)}><option value="">Todos</option>{Object.keys(mapa).sort().map(b=><option key={b}>{b}</option>)}</select></div>
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
+        {kpi("Recebido no período", fmtCur(entrou), "pela data de pagamento das parcelas", C.success)}
+        {kpi("A receber destes contratos", fmtCur(aReceber), `já pago: ${fmtCur(recebidoContratos)}`, C.danger, ["clientes",{grupo:"areceber"}])}
+        {kpi("Ticket médio", fmtCur(ticket), "por contrato", C.text)}
+        {kpi("Contratos", String(sel.length), ben?"deste benefício":"no período", C.info, ["clientes",{}])}
+      </div>
+
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:8}}>
+        <div style={{fontFamily:FD,fontSize:15,color:C.accentLight}}>Desempenho por benefício</div>
+        <div style={{display:"flex",gap:14,alignItems:"center",fontSize:11,color:C.muted}}>
+          <span style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:2,background:COR_RECEBIDO,display:"inline-block"}}/>Recebido</span>
+          <span style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:2,background:COR_ARECEBER,display:"inline-block"}}/>A receber</span>
+          <button type="button" onClick={()=>setTabela(!tabela)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,cursor:"pointer",fontSize:10,padding:"2px 8px"}}>{tabela?"Ver gráfico":"Ver tabela"}</button>
+        </div>
+      </div>
+      {linhas.length===0 && <div style={{fontSize:12,color:C.muted,padding:"14px 0"}}>Nenhum contrato no período.</div>}
+
+      {!tabela && linhas.map((l,i)=>{
+        const ativo = !ben || l.nome===ben;
+        const rec = Math.min(l.recebido, l.contratado), pend = Math.max(l.contratado - l.recebido, 0);
+        const w = (l.contratado/max)*100;
+        return (
+          <div key={l.nome} onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)}
+            onClick={()=>!l.outros&&setBen(ben===l.nome?"":l.nome)} title={l.outros?"":"Clique para filtrar por este benefício"}
+            style={{display:"grid",gridTemplateColumns:"minmax(110px,220px) 1fr 150px",gap:10,alignItems:"center",padding:"6px 4px",cursor:l.outros?"default":"pointer",opacity:ativo?1:0.35,borderRadius:6,background:hover===i?C.surface:"transparent",position:"relative"}}>
+            <span style={{fontSize:12,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{l.nome}</span>
+            <div style={{height:14,display:"flex",gap:2,width:`${Math.max(w,1.5)}%`}}>
+              {rec>0&&<div style={{flex:rec,background:COR_RECEBIDO,borderRadius:pend>0?"0":"0 4px 4px 0"}}/>}
+              {pend>0&&<div style={{flex:pend,background:COR_ARECEBER,borderRadius:"0 4px 4px 0"}}/>}
+            </div>
+            <span style={{fontSize:11,color:C.muted,fontFamily:FM,whiteSpace:"nowrap",textAlign:"right"}}><b style={{color:C.text}}>{fmtCur(l.contratado)}</b> · {Math.round(l.contratado/totalPer*100)}%</span>
+            {hover===i&&(
+              <div style={{position:"absolute",right:4,top:"100%",zIndex:5,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:11,lineHeight:1.6,boxShadow:"0 6px 18px #0008",pointerEvents:"none",minWidth:190}}>
+                <div style={{color:C.text,fontWeight:700,marginBottom:2}}>{l.nome}</div>
+                <div style={{color:C.muted}}>Contratos: <b style={{color:C.text}}>{l.n}</b></div>
+                <div style={{color:C.muted}}>Contratado: <b style={{color:C.text}}>{fmtCur(l.contratado)}</b></div>
+                <div style={{color:C.muted}}><span style={{display:"inline-block",width:8,height:8,background:COR_RECEBIDO,borderRadius:2,marginRight:4}}/>Recebido: <b style={{color:C.text}}>{fmtCur(rec)}</b></div>
+                <div style={{color:C.muted}}><span style={{display:"inline-block",width:8,height:8,background:COR_ARECEBER,borderRadius:2,marginRight:4}}/>A receber: <b style={{color:C.text}}>{fmtCur(pend)}</b></div>
+                <div style={{color:C.muted}}>Ticket médio: <b style={{color:C.text}}>{fmtCur(l.contratado/(l.n||1))}</b></div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {tabela && linhas.length>0 && (
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+          <thead><tr style={{color:C.muted,fontFamily:FM,fontSize:10,textTransform:"uppercase"}}>
+            <th style={{textAlign:"left",padding:6}}>Benefício</th><th style={{textAlign:"right",padding:6}}>Contratos</th><th style={{textAlign:"right",padding:6}}>Contratado</th><th style={{textAlign:"right",padding:6}}>Recebido</th><th style={{textAlign:"right",padding:6}}>A receber</th><th style={{textAlign:"right",padding:6}}>%</th>
+          </tr></thead>
+          <tbody>{linhas.map(l=>(
+            <tr key={l.nome} onClick={()=>!l.outros&&setBen(ben===l.nome?"":l.nome)} style={{borderTop:`1px solid ${C.border}`,cursor:l.outros?"default":"pointer",opacity:!ben||l.nome===ben?1:0.4}}>
+              <td style={{padding:6}}>{l.nome}</td><td style={{padding:6,textAlign:"right"}}>{l.n}</td><td style={{padding:6,textAlign:"right"}}>{fmtCur(l.contratado)}</td><td style={{padding:6,textAlign:"right"}}>{fmtCur(Math.min(l.recebido,l.contratado))}</td><td style={{padding:6,textAlign:"right"}}>{fmtCur(Math.max(l.contratado-l.recebido,0))}</td><td style={{padding:6,textAlign:"right"}}>{Math.round(l.contratado/totalPer*100)}%</td>
+            </tr>))}</tbody>
+        </table>
+      )}
+      {ben && <div style={{marginTop:8}}><FiltroPainel texto={ben} onLimpar={()=>setBen("")}/></div>}
+    </div>
+  );
+}
+
 function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNewLead, onIr = ()=>{} }) {
   const total = clients.length;
   const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)).length;
@@ -926,6 +1050,8 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
           <button style={S.btn("primary")} onClick={onNewClient}>+ Novo Cliente</button>
         </div>
       </div>
+
+      <Faturamento clients={clients} onIr={onIr}/>
 
       <div style={S.grid3}>
         {[
@@ -1038,6 +1164,7 @@ function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
       &&(!fGrupo||noGrupo(c,fGrupo));
   }).sort((a,b)=>diaISO(b.dataCadastro).localeCompare(diaISO(a.dataCadastro)));
   const totalHon = filtered.reduce((t,c)=>t+(Number(c.valorHonorarios)||0),0);
+  const totalRec = filtered.reduce((t,c)=>t+recebidoCli(c),0);
 
   const exportCSV = () => {
     const header = ["Nome","CPF","Telefone","Benefício","Status","Honorários","Cadastro"].join(";");
@@ -1060,18 +1187,22 @@ function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
         <button style={S.btn("ghost")} onClick={exportCSV}>↓ CSV</button>
         <button style={S.btn("primary")} onClick={onNew}>+ Novo Cliente</button>
       </div>
-      {intervalo&&<div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
+      {(intervalo||fBen||fStatus||fGrupo||search)&&<div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
         <div style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
           <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Contratos fechados</div>
           <div style={{fontSize:22,fontWeight:700,color:C.accent,fontFamily:FD}}>{filtered.length}</div>
         </div>
         <div style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
-          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Honorários contratados</div>
-          <div style={{fontSize:22,fontWeight:700,color:C.success,fontFamily:FD}}>{fmtCur(totalHon)}</div>
+          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Faturamento (contratado)</div>
+          <div style={{fontSize:22,fontWeight:700,color:C.accentLight,fontFamily:FD}}>{fmtCur(totalHon)}</div>
+        </div>
+        <div style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
+          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Recebido / A receber</div>
+          <div style={{fontSize:16,fontWeight:700,fontFamily:FD,marginTop:4}}><span style={{color:C.success}}>{fmtCur(totalRec)}</span> <span style={{color:C.muted,fontSize:12}}>/</span> <span style={{color:C.danger}}>{fmtCur(Math.max(totalHon-totalRec,0))}</span></div>
         </div>
         <div style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
           <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Período</div>
-          <div style={{fontSize:13,fontWeight:600,marginTop:6}}>{fPer==="custom"?`${dIni?fmtDate(dIni):"início"} a ${dFim?fmtDate(dFim):"sem limite"}`:`${fmtDate(intervalo[0])} a ${fmtDate(intervalo[1])}`}</div>
+          <div style={{fontSize:13,fontWeight:600,marginTop:6}}>{!intervalo?"Todo o período":fPer==="custom"?`${dIni?fmtDate(dIni):"início"} a ${dFim?fmtDate(dFim):"sem limite"}`:`${fmtDate(intervalo[0])} a ${fmtDate(intervalo[1])}`}{fBen?` · ${fBen}`:""}</div>
         </div>
       </div>}
       {fGrupo&&<FiltroPainel texto={GRUPOS_CLI[fGrupo]} onLimpar={()=>setFGrupo("")}/>}
