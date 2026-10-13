@@ -3,7 +3,6 @@ import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycby3VGOv4dSFIayqIFzcEYm-2f52KFsV-KYKsyIZHu8eibgXnZLomdhqy4_wwRNbOKEFDQ/exec";
 const SYNC_INTERVAL = 30000; // 30 segundos
 
 // ─── PALETA & TIPOGRAFIA ─────────────────────────────────────────────────────
@@ -31,29 +30,29 @@ const statusColor = { "Novo cliente":C.info,"Documentação pendente":C.warn,"Ag
 const tempColor = { "🔥 Quente":C.danger,"🟡 Morno":C.warn,"❄️ Frio":C.info };
 const leadStatusColor = { "Novo contato":C.info,"Em negociação":C.accent,"Proposta enviada":C.purple,"Aguardando retorno":C.warn,"Convertido":C.success,"Perdido":C.muted };
 
-// ─── GOOGLE SHEETS API ────────────────────────────────────────────────────────
+// ─── SESSÃO (login) ───────────────────────────────────────────────────────────
+const TOKEN_KEY = "crm_sessao";
+function lerToken() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } }
+function gravarToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch {} }
+function sair() { gravarToken(""); window.dispatchEvent(new Event("crm-logout")); }
+function authHeaders() { const t = lerToken(); return t ? { Authorization: "Bearer " + t } : {}; }
+
+// ─── GOOGLE SHEETS API (via /api/sheets, protegido por login) ─────────────────
+async function chamarSheets(qs, body) {
+  const r = await fetch(`/api/sheets?${qs}`, {
+    method: body ? "POST" : "GET",
+    headers: { ...authHeaders(), ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (r.status === 401) { sair(); throw new Error("Sessão expirada"); }
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || j.data?.error || "Erro na planilha");
+  return j.data;
+}
 const api = {
-  async getAll() {
-    const r = await fetch(`${SCRIPT_URL}?action=getAll`);
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error);
-    return j.data;
-  },
-  async upsert(entity, data) {
-    const r = await fetch(`${SCRIPT_URL}?action=upsert${cap(entity)}`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error);
-    return j.data;
-  },
-  async del(entity, id) {
-    const r = await fetch(`${SCRIPT_URL}?action=delete${cap(entity)}&id=${id}`);
-    const j = await r.json();
-    if (!j.ok) throw new Error(j.error);
-    return j.data;
-  },
+  getAll: () => chamarSheets("action=getAll"),
+  upsert: (entity, data) => chamarSheets(`action=upsert${cap(entity)}`, data),
+  del: (entity, id) => chamarSheets(`action=delete${cap(entity)}&id=${encodeURIComponent(id)}`),
 };
 
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
@@ -203,7 +202,7 @@ async function extrairDados(base64, mediaType, fileName, instrucao = "", nomeCli
     ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
     : { type: "image",    source: { type: "base64", media_type: mt, data: base64 } };
 
-  const headers = { "Content-Type": "application/json" };
+  const headers = { "Content-Type": "application/json", ...authHeaders() };
 
   const r = await fetch("/api/claude", {
     method: "POST",
@@ -241,9 +240,10 @@ const ASSINATURA = "Yalley Vasconcelos, Advogado";
 const MSG_TIPOS = { protocolo:"Processo Protocolado", pericia:"Perícia Agendada", resultado:"Movimentação Processual", aprovado:"Benefício Concedido", recurso:"Recurso Interposto", documento:"📎 Só resumir o documento anexado" };
 async function chamarIA(content, maxTokens) {
   const r = await fetch("/api/claude", {
-    method:"POST", headers:{"Content-Type":"application/json"},
+    method:"POST", headers:{"Content-Type":"application/json", ...authHeaders()},
     body: JSON.stringify({ max_tokens: maxTokens, messages:[{ role:"user", content }] })
   });
+  if (r.status === 401) { sair(); throw new Error("Sessão expirada"); }
   const d = await r.json().catch(()=>({}));
   if (!r.ok || d.error) throw new Error(d.error?.message || `Erro ${r.status} na IA`);
   return (d.content?.[0]?.text || "").replace(/\s[—–]\s/g, ", ").trim();
@@ -1751,7 +1751,42 @@ function AgendaGlobal({ clients, leads, tarefas, followUps, onSaveTarefa, onDelT
 // ═══════════════════════════════════════════════════════════════════════════
 // APP PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════
-export default function App() {
+function Login({ onOk }) {
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [load, setLoad] = useState(false);
+  const entrar = async (e) => {
+    e.preventDefault(); setErro(""); setLoad(true);
+    try {
+      const r = await fetch("/api/login", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ senha }) });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok || !j.token) throw new Error(j.error || "Não foi possível entrar");
+      gravarToken(j.token); onOk();
+    } catch (er) { setErro(er.message); }
+    setLoad(false);
+  };
+  return (
+    <div style={{...S.app, alignItems:"center", justifyContent:"center", padding:16}}>
+      <form onSubmit={entrar} style={{...S.card, width:"100%", maxWidth:360, textAlign:"center"}}>
+        <div style={S.logo}>Yalley Vasconcelos</div>
+        <div style={{...S.logoSub, marginBottom:20}}>CRM Previdenciário · OAB/AP 3262</div>
+        <label style={{...S.lbl, textAlign:"left"}}>Senha de acesso</label>
+        <input type="password" autoFocus autoComplete="current-password" style={S.inp} value={senha} onChange={e=>setSenha(e.target.value)}/>
+        {erro && <div style={{color:C.danger, fontSize:12, marginTop:8, fontFamily:FM}}>⚠ {erro}</div>}
+        <button type="submit" disabled={load||!senha} style={{...S.btn("primary"), width:"100%", marginTop:14}}>{load?"Entrando...":"Entrar"}</button>
+        <div style={{fontSize:10, color:C.muted, marginTop:12}}>Acesso restrito ao escritório. A sessão vale por 30 dias neste aparelho.</div>
+      </form>
+    </div>
+  );
+}
+
+export default function Raiz() {
+  const [logado, setLogado] = useState(!!lerToken());
+  useEffect(() => { const f = () => setLogado(false); window.addEventListener("crm-logout", f); return () => window.removeEventListener("crm-logout", f); }, []);
+  return logado ? <App/> : <Login onOk={()=>setLogado(true)}/>;
+}
+
+function App() {
   const [clients, setClients] = useState([]);
   const [leads, setLeads] = useState([]);
   const [tarefas, setTarefas] = useState([]);
@@ -1917,7 +1952,10 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <SyncBar status={syncStatus} lastSync={lastSync} onSync={loadData}/>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <SyncBar status={syncStatus} lastSync={lastSync} onSync={loadData}/>
+          <button onClick={sair} title="Sair do CRM neste aparelho" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,cursor:"pointer",fontSize:11,padding:"4px 10px",fontFamily:FB}}>Sair</button>
+        </div>
       </header>
 
       <main style={S.main}>
