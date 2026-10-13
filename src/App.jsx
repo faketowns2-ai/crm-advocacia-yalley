@@ -966,7 +966,7 @@ function Faturamento({ clients, onIr }) {
       </div>
 
       <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:16}}>
-        {kpi("Recebido no período", fmtCur(entrou), "pela data de pagamento das parcelas", C.success)}
+        {kpi("Recebido no período", fmtCur(entrou), "clique para ver de onde veio →", C.success, ["recebimentos",{per, dIni, dFim, ben}])}
         {kpi("A receber destes contratos", fmtCur(aReceber), `já pago: ${fmtCur(recebidoContratos)}`, C.danger, ["clientes",{grupo:"areceber"}])}
         {kpi("Ticket médio", fmtCur(ticket), "por contrato", C.text)}
         {kpi("Contratos", String(sel.length), ben?"deste benefício":"no período", C.info, ["clientes",{}])}
@@ -1026,6 +1026,123 @@ function Faturamento({ clients, onIr }) {
   );
 }
 
+// ─── RECEBIMENTOS (origem do dinheiro recebido) ───────────────────────────────
+function BarrasSimples({ titulo, itens, total, onClick, ativo }) {
+  const max = Math.max(1, ...itens.map(i=>i.valor));
+  return (
+    <div style={{...S.card, flex:"1 1 320px", marginBottom:0}}>
+      <div style={{fontFamily:FD,fontSize:15,color:C.accentLight,marginBottom:8}}>{titulo}</div>
+      {itens.length===0 && <div style={{fontSize:12,color:C.muted}}>Sem dados.</div>}
+      {itens.map(i=>(
+        <div key={i.nome} onClick={()=>onClick&&onClick(i.nome)} title={onClick?"Clique para filtrar":""}
+          style={{display:"grid",gridTemplateColumns:"minmax(90px,160px) 1fr 130px",gap:8,alignItems:"center",padding:"5px 2px",cursor:onClick?"pointer":"default",opacity:!ativo||ativo===i.nome?1:0.35}}>
+          <span style={{fontSize:12,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{i.nome}</span>
+          <div style={{height:12,width:`${Math.max(i.valor/max*100,1.5)}%`,background:COR_RECEBIDO,borderRadius:"0 4px 4px 0"}}/>
+          <span style={{fontSize:11,color:C.muted,fontFamily:FM,textAlign:"right",whiteSpace:"nowrap"}}><b style={{color:C.text}}>{fmtCur(i.valor)}</b> · {Math.round(i.valor/(total||1)*100)}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Recebimentos({ clients, onSelect, preset = {} }) {
+  const [per, setPer] = useState(preset.per ?? "mes");
+  const [dIni, setDIni] = useState(preset.dIni || "");
+  const [dFim, setDFim] = useState(preset.dFim || "");
+  const [ben, setBen] = useState(preset.ben || "");
+  const [forma, setForma] = useState("");
+  const iv = intervaloPeriodo(per, dIni, dFim);
+
+  const todos = [];
+  clients.forEach(c => {
+    const lista = lerParcelas(c);
+    lista.forEach((p, i) => {
+      if (!p.pago) return;
+      todos.push({ cli:c, nome:c.nome, beneficio:c.beneficio||"Sem benefício", n:i+1, total:lista.length, valor:Number(p.valor)||0, data:diaISO(p.dataPgto), forma:p.forma||"Não informada", obs:p.obs||"" });
+    });
+  });
+  const semData = todos.filter(t=>!t.data).length;
+  const doPer = todos.filter(t => !iv || (t.data && t.data>=iv[0] && t.data<=iv[1]));
+  const lista = doPer.filter(t => (!ben||t.beneficio===ben) && (!forma||t.forma===forma)).sort((a,b)=>(b.data||"").localeCompare(a.data||""));
+  const total = lista.reduce((s,t)=>s+t.valor,0);
+  const nCli = new Set(lista.map(t=>String(t.cli.id))).size;
+
+  const agrupar = (arr, campo) => { const m={}; arr.forEach(t=>{ m[t[campo]]=(m[t[campo]]||0)+t.valor; }); return Object.entries(m).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor); };
+  const porForma = agrupar(doPer.filter(t=>!ben||t.beneficio===ben), "forma");
+  const porBen = agrupar(doPer.filter(t=>!forma||t.forma===forma), "beneficio");
+
+  const exportCSV = () => {
+    const linhas = [["Data","Cliente","Benefício","Parcela","Valor","Forma","Observação"].join(";"), ...lista.map(t=>[fmtDate(t.data)||"sem data", t.nome, t.beneficio, `${t.n}/${t.total}`, String(t.valor).replace(".",","), t.forma, (t.obs||"").replace(/;/g,",")].join(";"))];
+    const blob = new Blob(["﻿"+linhas.join("\n")],{type:"text/csv;charset=utf-8"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="recebimentos.csv"; a.click();
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:10,marginBottom:14}}>
+        <div>
+          <h2 style={{fontFamily:FD,fontSize:22,color:C.accentLight,margin:0}}>Recebimentos</h2>
+          <p style={{color:C.muted,fontSize:12,margin:"3px 0 0",fontFamily:FM}}>De onde veio o dinheiro recebido{iv?` de ${fmtDate(iv[0])} a ${fmtDate(iv[1])}`:" em todo o período"}</p>
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+          <div><label style={S.lbl}>Período</label><select style={{...S.sel,minWidth:150}} value={per} onChange={e=>setPer(e.target.value)}>{PERIODOS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
+          {per==="custom"&&<>
+            <div><label style={S.lbl}>De</label><input type="date" style={S.inp} value={dIni} onChange={e=>setDIni(e.target.value)}/></div>
+            <div><label style={S.lbl}>Até</label><input type="date" style={S.inp} value={dFim} onChange={e=>setDFim(e.target.value)}/></div>
+          </>}
+          <div><label style={S.lbl}>Benefício</label><select style={{...S.sel,minWidth:170}} value={ben} onChange={e=>setBen(e.target.value)}><option value="">Todos</option>{[...new Set(todos.map(t=>t.beneficio))].sort().map(b=><option key={b}>{b}</option>)}</select></div>
+          <div><label style={S.lbl}>Forma</label><select style={{...S.sel,minWidth:140}} value={forma} onChange={e=>setForma(e.target.value)}><option value="">Todas</option>{[...new Set(todos.map(t=>t.forma))].sort().map(f=><option key={f}>{f}</option>)}</select></div>
+          <button style={S.btn("ghost")} onClick={exportCSV}>↓ CSV</button>
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+        {[["Total recebido",fmtCur(total),C.success],["Pagamentos",String(lista.length),C.info],["Clientes que pagaram",String(nCli),C.accentLight],["Média por pagamento",fmtCur(lista.length?total/lista.length:0),C.text]].map(([r,v,c])=>(
+          <div key={r} style={{flex:"1 1 160px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
+            <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>{r}</div>
+            <div style={{fontSize:22,fontWeight:700,color:c,fontFamily:FD}}>{v}</div>
+          </div>
+        ))}
+      </div>
+      {(ben||forma)&&<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        {ben&&<FiltroPainel texto={ben} onLimpar={()=>setBen("")}/>}
+        {forma&&<FiltroPainel texto={forma} onLimpar={()=>setForma("")}/>}
+      </div>}
+
+      <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:14}}>
+        <BarrasSimples titulo="Por benefício" itens={porBen} total={porBen.reduce((s,i)=>s+i.valor,0)} onClick={n=>setBen(ben===n?"":n)} ativo={ben}/>
+        <BarrasSimples titulo="Por forma de pagamento" itens={porForma} total={porForma.reduce((s,i)=>s+i.valor,0)} onClick={n=>setForma(forma===n?"":n)} ativo={forma}/>
+      </div>
+
+      <div style={S.card}>
+        <div style={S.cardTitle}>Pagamentos ({lista.length})</div>
+        {lista.length===0 && <div style={{fontSize:12,color:C.muted,padding:"10px 0"}}>Nenhum pagamento registrado neste filtro. Os pagamentos entram aqui quando você marca a parcela como paga na aba Financeiro do cliente.</div>}
+        {lista.length>0 && (
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:640}}>
+              <thead><tr style={{color:C.muted,fontFamily:FM,fontSize:10,textTransform:"uppercase"}}>
+                <th style={{textAlign:"left",padding:6}}>Data</th><th style={{textAlign:"left",padding:6}}>Cliente</th><th style={{textAlign:"left",padding:6}}>Benefício</th><th style={{textAlign:"center",padding:6}}>Parcela</th><th style={{textAlign:"left",padding:6}}>Forma</th><th style={{textAlign:"right",padding:6}}>Valor</th>
+              </tr></thead>
+              <tbody>{lista.map((t,i)=>(
+                <tr key={i} onClick={()=>onSelect(t.cli)} title="Abrir cliente" className="card-click" style={{borderTop:`1px solid ${C.border}`,cursor:"pointer"}}>
+                  <td style={{padding:6,fontFamily:FM,whiteSpace:"nowrap"}}>{t.data?fmtDate(t.data):<span style={{color:C.warn}}>sem data</span>}</td>
+                  <td style={{padding:6,fontWeight:600}}>{t.nome}{t.obs&&<div style={{fontSize:10,color:C.muted,fontWeight:400}}>{t.obs}</div>}</td>
+                  <td style={{padding:6,color:C.muted}}>{t.beneficio}</td>
+                  <td style={{padding:6,textAlign:"center",fontFamily:FM}}>{t.n}/{t.total}</td>
+                  <td style={{padding:6}}>{t.forma}</td>
+                  <td style={{padding:6,textAlign:"right",fontFamily:FM,fontWeight:700,color:C.success,whiteSpace:"nowrap"}}>{fmtCur(t.valor)}</td>
+                </tr>))}
+                <tr style={{borderTop:`2px solid ${C.accent}`}}><td colSpan={5} style={{padding:8,fontWeight:700}}>Total</td><td style={{padding:8,textAlign:"right",fontFamily:FM,fontWeight:700,color:C.success}}>{fmtCur(total)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+        {semData>0 && iv && <div style={{fontSize:11,color:C.warn,marginTop:10}}>Atenção: {semData} pagamento(s) antigo(s) estão sem data registrada e só aparecem em "Todo o período". Abra o cliente e preencha a data do pagamento para entrarem no período certo.</div>}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNewLead, onIr = ()=>{} }) {
   const total = clients.length;
   const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)).length;
@@ -1062,7 +1179,7 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
           {val:lQuentes,label:"Leads Quentes 🔥",color:C.danger,ir:["leads",{temp:"🔥 Quente"}]},
           {val:pendentes,label:"Tarefas Vencidas",color:pendentes>0?C.danger:C.success,ir:["agenda",{}]},
           {val:fmtCur(recTotal),label:"Honorários Totais",color:C.purple,ir:["clientes",{}]},
-          {val:fmtCur(recebido),label:"Receita Recebida",color:C.success,ir:["clientes",{grupo:"pagantes"}]},
+          {val:fmtCur(recebido),label:"Receita Recebida",color:C.success,ir:["recebimentos",{per:""}]},
           {val:fmtCur(recTotal-recebido),label:"A Receber",color:C.danger,ir:["clientes",{grupo:"areceber"}]},
         ].map((s,i)=>(
           <div key={i} role="button" tabIndex={0} title={`Abrir ${s.label}`} className="card-click"
@@ -1931,6 +2048,7 @@ function App() {
     { key:"leads",     label:"Leads" },
     { key:"clientes",  label:"Clientes" },
     { key:"agenda",    label:"Agenda" },
+    { key:"recebimentos", label:"Recebimentos" },
   ];
 
   const leadsQ = leads.filter(l=>l.temperatura==="🔥 Quente"&&!["Convertido","Perdido"].includes(l.status)).length;
@@ -1994,6 +2112,8 @@ function App() {
           />
         ) : view==="clientes" ? (
           <ClientesList key={"c"+preset.v} preset={preset.f} clients={clients} tarefas={tarefas} onSelect={c=>setSelectedClient(c)} onNew={()=>setShowNewClient(true)}/>
+        ) : view==="recebimentos" ? (
+          <Recebimentos key={"r"+preset.v} preset={preset.f} clients={clients} onSelect={c=>setSelectedClient(c)}/>
         ) : view==="agenda" ? (
           <AgendaGlobal clients={clients} leads={leads} tarefas={tarefas} followUps={followUps}
             onSaveTarefa={saveTarefa} onDelTarefa={delTarefa} onSaveFollowUp={saveFollowUp}
