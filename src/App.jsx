@@ -62,6 +62,14 @@ function valorFaturavel(c) { return ehIndeferido(c) ? recebidoCli(c) : (Number(c
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
 // ─── FILA OFFLINE ─────────────────────────────────────────────────────────────
+// Ids excluídos aguardando confirmação da planilha (evita que o item "volte" na sincronização)
+const excluidos = {
+  key: "crm_excluidos",
+  get() { try { return new Set(JSON.parse(localStorage.getItem(this.key) || "[]")); } catch { return new Set(); } },
+  add(k) { const s = this.get(); s.add(k); try { localStorage.setItem(this.key, JSON.stringify([...s])); } catch {} },
+  del(k) { const s = this.get(); s.delete(k); try { localStorage.setItem(this.key, JSON.stringify([...s])); } catch {} },
+};
+
 const offlineQueue = {
   key: "crm_offline_queue",
   get() { try { return JSON.parse(localStorage.getItem(this.key) || "[]"); } catch { return []; } },
@@ -1304,7 +1312,7 @@ function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
       <div style={{marginBottom:16,display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Buscar</label><input style={S.inp} placeholder="Nome, CPF, telefone, NB..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
         <div style={{flex:"1 1 150px"}}><label style={S.lbl}>Status</label><select style={S.sel} value={fStatus} onChange={e=>setFStatus(e.target.value)}><option value="">Todos</option>{STATUS_CLI.map(s=><option key={s}>{s}</option>)}</select></div>
-        <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Benefício</label><select style={S.sel} value={fBen} onChange={e=>setFBen(e.target.value)}><option value="">Todos</option>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></div>
+        <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Benefício</label><select style={S.sel} value={fBen} onChange={e=>setFBen(e.target.value)}><option value="">Todos</option>{[...new Set([...BENEFICIOS, ...clients.map(c=>c.beneficio).filter(Boolean)])].sort().map(b=><option key={b}>{b}</option>)}</select></div>
         <div style={{flex:"1 1 160px"}}><label style={S.lbl}>Contrato fechado em</label><select style={S.sel} value={fPer} onChange={e=>setFPer(e.target.value)}>{PERIODOS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
         {fPer==="custom"&&<>
           <div style={{flex:"1 1 140px"}}><label style={S.lbl}>De</label><input type="date" style={S.inp} value={dIni} onChange={e=>setDIni(e.target.value)}/></div>
@@ -1368,7 +1376,9 @@ function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DETALHE DO CLIENTE
 // ═══════════════════════════════════════════════════════════════════════════
-function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave, onSaveTarefa, onDelTarefa, onSaveMensagem, onAddTimeline, onDelTimeline }) {
+function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave, onSaveTarefa, onDelTarefa, onSaveMensagem, onAddTimeline, onDelTimeline, onDelete }) {
+  const [confirmaExc, setConfirmaExc] = useState(false);
+  const [excluindo, setExcluindo] = useState(false);
   const [tab, setTab] = useState("dados");
   const [form, setForm] = useState({...cliente});
   const [saving, setSaving] = useState(false);
@@ -1431,7 +1441,22 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
           <span style={{fontFamily:FM,fontSize:10,color:C.muted}}>{form.beneficio}{form.numeroBeneficio?` · NB: ${form.numeroBeneficio}`:""}</span>
         </div>
         <Tag color={statusColor[form.status]||C.muted}>{form.status}</Tag>
+        {onDelete&&<button onClick={()=>setConfirmaExc(true)} title="Excluir cliente" style={{...S.btn("ghost"),padding:"6px 12px",color:C.danger,borderColor:C.danger+"66"}}>🗑 Excluir</button>}
       </div>
+
+      {confirmaExc&&(
+        <div onClick={()=>!excluindo&&setConfirmaExc(false)} style={{position:"fixed",inset:0,background:"#000a",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div onClick={e=>e.stopPropagation()} style={{...S.card,maxWidth:440,width:"100%",border:`1px solid ${C.danger}`}}>
+            <div style={{fontFamily:FD,fontSize:18,color:C.danger,marginBottom:8}}>Excluir cliente?</div>
+            <div style={{fontSize:13,lineHeight:1.6,marginBottom:6}}>Você está excluindo <b>{form.nome}</b>. A linha dele será apagada da planilha, junto com as tarefas e o histórico processual.</div>
+            <div style={{fontSize:12,color:C.warn,marginBottom:14}}>Essa ação não pode ser desfeita. Se o caso só terminou, prefira mudar o status para "Encerrado" ou "Benefício indeferido".</div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <button style={S.btn("ghost")} disabled={excluindo} onClick={()=>setConfirmaExc(false)}>Cancelar</button>
+              <button style={S.btn("danger")} disabled={excluindo} onClick={async()=>{ setExcluindo(true); await onDelete(cliente); }}>{excluindo?"Excluindo...":"Excluir definitivamente"}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{display:"flex",gap:4,marginBottom:16,flexWrap:"wrap"}}>
         {tabs.map(t=><button key={t.k} style={{...S.navBtn(tab===t.k),borderRadius:7}} onClick={()=>setTab(t.k)}>{t.l}</button>)}
@@ -1457,7 +1482,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
             <F label="Telefone"><input style={S.inp} value={form.telefone||""} onChange={e=>setForm({...form,telefone:e.target.value})}/></F>
             <F label="E-mail"><input style={S.inp} value={form.email||""} onChange={e=>setForm({...form,email:e.target.value})}/></F>
             <F label="Número do Benefício/NB"><input style={S.inp} value={form.numeroBeneficio||""} onChange={e=>setForm({...form,numeroBeneficio:e.target.value})} placeholder="NB ou nº do processo"/></F>
-            <F label="Benefício"><select style={S.sel} value={form.beneficio||""} onChange={e=>setForm({...form,beneficio:e.target.value})}>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></F>
+            <F label="Benefício"><select style={S.sel} value={form.beneficio||""} onChange={e=>setForm({...form,beneficio:e.target.value})}>{[...new Set([form.beneficio, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
             <F label="Status"><select style={S.sel} value={form.status||""} onChange={e=>setForm({...form,status:e.target.value})}>{STATUS_CLI.map(s=><option key={s}>{s}</option>)}</select></F>
             <F label="Data do contrato"><input type="date" style={S.inp} value={diaISO(form.dataCadastro)} onChange={e=>setForm({...form,dataCadastro:e.target.value})}/></F>
           </div>
@@ -1699,7 +1724,7 @@ function LeadDetalhe({ lead, followUps, onBack, onSave, onSaveFollowUp, onDelFol
           <div style={S.grid2}>
             <F label="Nome"><input style={S.inp} value={form.nome||""} onChange={e=>setForm({...form,nome:e.target.value})}/></F>
             <F label="Telefone"><input style={S.inp} value={form.telefone||""} onChange={e=>setForm({...form,telefone:e.target.value})}/></F>
-            <F label="Benefício"><select style={S.sel} value={form.beneficioInteresse||""} onChange={e=>setForm({...form,beneficioInteresse:e.target.value})}>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></F>
+            <F label="Benefício"><select style={S.sel} value={form.beneficioInteresse||""} onChange={e=>setForm({...form,beneficioInteresse:e.target.value})}>{[...new Set([form.beneficioInteresse, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
             <F label="Origem"><select style={S.sel} value={form.origem||""} onChange={e=>setForm({...form,origem:e.target.value})}>{ORIGEM_OPTS.map(o=><option key={o}>{o}</option>)}</select></F>
             <F label="Temperatura"><select style={S.sel} value={form.temperatura||""} onChange={e=>setForm({...form,temperatura:e.target.value})}>{TEMP_OPTS.map(t=><option key={t}>{t}</option>)}</select></F>
             <F label="Status"><select style={S.sel} value={form.status||""} onChange={e=>setForm({...form,status:e.target.value})}>{STATUS_LEAD.map(s=><option key={s}>{s}</option>)}</select></F>
@@ -1931,7 +1956,9 @@ function App() {
   const syncTimer = useRef(null);
 
   // Merge: mantém registros locais que ainda não chegaram ao Sheets
-  const mergeWithLocal = useCallback((remoto, local) => {
+  const mergeWithLocal = useCallback((remotoBruto, local) => {
+    const exc = excluidos.get();
+    const remoto = remotoBruto.filter(x => ![...exc].some(k => k.endsWith(":"+String(x.id))));
     const idsRemoto = new Set(remoto.map(x => String(x.id)));
     // Itens locais que o Sheets ainda não confirmou ficam preservados
     const apenasLocal = local.filter(x => !idsRemoto.has(String(x.id)));
@@ -1960,7 +1987,10 @@ function App() {
       const queue = offlineQueue.get();
       if (queue.length > 0) {
         for (const op of queue) {
-          try { await api.upsert(op.entity, op.data); } catch {}
+          try {
+            if (op.op === "del") { await api.del(op.entity, op.id); excluidos.del(`${op.entity}:${op.id}`); }
+            else await api.upsert(op.entity, op.data);
+          } catch {}
         }
         offlineQueue.clear();
       }
@@ -2011,8 +2041,26 @@ function App() {
   };
 
   const remove = async (entity, id, setFn) => {
+    const k = `${entity}:${id}`;
+    excluidos.add(k);
     setFn(prev => prev.filter(x => String(x.id) !== String(id)));
-    try { await api.del(entity, id); } catch { setSyncStatus("offline"); }
+    for (let t = 0; t < 2; t++) {
+      try { await api.del(entity, id); excluidos.del(k); return true; }
+      catch { if (t === 0) await new Promise(r => setTimeout(r, 1500)); }
+    }
+    offlineQueue.add({ op:"del", entity, id });
+    setSyncStatus("offline");
+    return false;
+  };
+  const delCliente = async (c) => {
+    const id = String(c.id);
+    await Promise.all([
+      ...tarefas.filter(t => String(t.clienteId) === id).map(t => remove("Tarefa", t.id, setTarefas)),
+      ...timeline.filter(e => String(e.clienteId) === id).map(e => remove("Timeline", e.id, setTimeline)),
+    ]);
+    const ok = await remove("Cliente", c.id, setClients);
+    setSelectedClient(null);
+    return ok;
   };
 
   const saveCliente = (c) => persist("Cliente", c, setClients);
@@ -2103,6 +2151,7 @@ function App() {
             onSaveMensagem={saveMensagem}
             onAddTimeline={saveTimeline}
             onDelTimeline={delTimeline}
+            onDelete={delCliente}
           />
         ) : view==="dashboard" ? (
           <Dashboard clients={clients} leads={leads} tarefas={tarefas}
