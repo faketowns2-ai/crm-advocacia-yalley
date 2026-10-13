@@ -902,7 +902,7 @@ function Parcelas({ cliente, onChange }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════
-function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNewLead }) {
+function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNewLead, onIr = ()=>{} }) {
   const total = clients.length;
   const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)).length;
   const concedidos = clients.filter(c=>c.status==="Benefício concedido").length;
@@ -929,31 +929,34 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
 
       <div style={S.grid3}>
         {[
-          {val:total,label:"Clientes",color:C.info},
-          {val:ativos,label:"Processos Ativos",color:C.accent},
-          {val:concedidos,label:"Concedidos",color:C.success},
-          {val:lAtivos,label:"Leads Ativos",color:C.warn},
-          {val:lQuentes,label:"Leads Quentes 🔥",color:C.danger},
-          {val:pendentes,label:"Tarefas Vencidas",color:pendentes>0?C.danger:C.success},
-          {val:fmtCur(recTotal),label:"Honorários Totais",color:C.purple},
-          {val:fmtCur(recebido),label:"Receita Recebida",color:C.success},
-          {val:fmtCur(recTotal-recebido),label:"A Receber",color:C.danger},
+          {val:total,label:"Clientes",color:C.info,ir:["clientes",{}]},
+          {val:ativos,label:"Processos Ativos",color:C.accent,ir:["clientes",{grupo:"ativos"}]},
+          {val:concedidos,label:"Concedidos",color:C.success,ir:["clientes",{status:"Benefício concedido"}]},
+          {val:lAtivos,label:"Leads Ativos",color:C.warn,ir:["leads",{ativos:true}]},
+          {val:lQuentes,label:"Leads Quentes 🔥",color:C.danger,ir:["leads",{temp:"🔥 Quente"}]},
+          {val:pendentes,label:"Tarefas Vencidas",color:pendentes>0?C.danger:C.success,ir:["agenda",{}]},
+          {val:fmtCur(recTotal),label:"Honorários Totais",color:C.purple,ir:["clientes",{}]},
+          {val:fmtCur(recebido),label:"Receita Recebida",color:C.success,ir:["clientes",{grupo:"pagantes"}]},
+          {val:fmtCur(recTotal-recebido),label:"A Receber",color:C.danger,ir:["clientes",{grupo:"areceber"}]},
         ].map((s,i)=>(
-          <div key={i} style={S.stat}>
+          <div key={i} role="button" tabIndex={0} title={`Abrir ${s.label}`} className="card-click"
+            onClick={()=>onIr(...s.ir)} onKeyDown={e=>{ if(e.key==="Enter") onIr(...s.ir); }}
+            style={{...S.stat,cursor:"pointer",position:"relative"}}>
             <span style={{...S.statVal,color:s.color,fontSize:typeof s.val==="string"?18:26}}>{s.val}</span>
             <span style={S.statLbl}>{s.label}</span>
+            <span style={{position:"absolute",top:8,right:10,fontSize:11,color:C.muted}}>→</span>
           </div>
         ))}
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginTop:16}}>
         <div style={S.card}>
-          <div style={S.cardTitle}>Tarefas Urgentes</div>
+          <div style={{...S.cardTitle,cursor:"pointer"}} onClick={()=>onIr("agenda",{})} title="Abrir Agenda">Tarefas Urgentes <span style={{fontSize:11,color:C.muted}}>→</span></div>
           {tarefasUrgentes.length===0&&<p style={{color:C.muted,fontSize:12}}>Sem tarefas pendentes.</p>}
           {tarefasUrgentes.map((t,i)=>{
             const cli = clients.find(c=>c.id===t.clienteId||String(c.id)===String(t.clienteId));
             return (
-              <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}`}}>
+              <div key={i} onClick={()=>cli?onSelectClient(cli):onIr("agenda",{})} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
                 <div>
                   <div style={{fontSize:12,marginBottom:2}}>{t.descricao}</div>
                   <div style={{fontSize:10,color:C.muted,fontFamily:FM}}>{cli?.nome||"—"}</div>
@@ -964,7 +967,7 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
           })}
         </div>
         <div style={S.card}>
-          <div style={S.cardTitle}>Clientes Recentes</div>
+          <div style={{...S.cardTitle,cursor:"pointer"}} onClick={()=>onIr("clientes",{})} title="Abrir Clientes">Clientes Recentes <span style={{fontSize:11,color:C.muted}}>→</span></div>
           {recentes.map(c=>(
             <div key={c.id} onClick={()=>onSelectClient(c)} style={{padding:"8px 0",borderBottom:`1px solid ${C.border}`,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
@@ -983,7 +986,7 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
           {STATUS_CLI.map(s=>{
             const n=clients.filter(c=>c.status===s).length;
             return (
-              <div key={s} style={{display:"flex",alignItems:"center",gap:7,padding:"5px 12px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+              <div key={s} className="card-click" onClick={()=>onIr("clientes",{status:s})} title={`Ver clientes: ${s}`} style={{display:"flex",alignItems:"center",gap:7,padding:"5px 12px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`,cursor:"pointer"}}>
                 <div style={{width:7,height:7,borderRadius:"50%",background:statusColor[s]||C.muted}}/>
                 <span style={{fontSize:12}}>{s}</span>
                 <span style={{fontFamily:FM,fontSize:11,color:C.accent,fontWeight:700}}>{n}</span>
@@ -999,9 +1002,27 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
 // ═══════════════════════════════════════════════════════════════════════════
 // LISTA DE CLIENTES
 // ═══════════════════════════════════════════════════════════════════════════
-function ClientesList({ clients, tarefas, onSelect, onNew }) {
+const GRUPOS_CLI = { ativos:"Processos ativos", areceber:"Com valor a receber", pagantes:"Com pagamento recebido" };
+function recebidoCli(c) { return lerParcelas(c).filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0); }
+function noGrupo(c, g) {
+  if (g==="ativos") return !["Encerrado","Benefício concedido"].includes(c.status);
+  if (g==="areceber") return (Number(c.valorHonorarios)||0) - recebidoCli(c) > 0.009;
+  if (g==="pagantes") return recebidoCli(c) > 0;
+  return true;
+}
+function FiltroPainel({ texto, onLimpar }) {
+  return (
+    <div style={{display:"inline-flex",alignItems:"center",gap:8,background:C.accent+"22",border:`1px solid ${C.accent}`,borderRadius:16,padding:"4px 12px",fontSize:12,marginBottom:12}}>
+      <span style={{color:C.accentLight}}>Filtro do painel: <b>{texto}</b></span>
+      <button onClick={onLimpar} style={{background:"none",border:"none",color:C.accentLight,cursor:"pointer",fontSize:12,padding:0}} title="Limpar filtro">✕</button>
+    </div>
+  );
+}
+
+function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
   const [search, setSearch] = useState("");
-  const [fStatus, setFStatus] = useState("");
+  const [fStatus, setFStatus] = useState(preset.status||"");
+  const [fGrupo, setFGrupo] = useState(preset.grupo||"");
   const [fBen, setFBen] = useState("");
   const [fPer, setFPer] = useState("");
   const [dIni, setDIni] = useState("");
@@ -1013,7 +1034,8 @@ function ClientesList({ clients, tarefas, onSelect, onNew }) {
     const dc=diaISO(c.dataCadastro);
     return (!q||c.nome?.toLowerCase().includes(q)||String(c.cpf).includes(q)||String(c.telefone).includes(q)||String(c.numeroBeneficio||"").includes(q))
       &&(!fStatus||c.status===fStatus)&&(!fBen||c.beneficio===fBen)
-      &&(!intervalo||(dc&&dc>=intervalo[0]&&dc<=intervalo[1]));
+      &&(!intervalo||(dc&&dc>=intervalo[0]&&dc<=intervalo[1]))
+      &&(!fGrupo||noGrupo(c,fGrupo));
   }).sort((a,b)=>diaISO(b.dataCadastro).localeCompare(diaISO(a.dataCadastro)));
   const totalHon = filtered.reduce((t,c)=>t+(Number(c.valorHonorarios)||0),0);
 
@@ -1052,6 +1074,7 @@ function ClientesList({ clients, tarefas, onSelect, onNew }) {
           <div style={{fontSize:13,fontWeight:600,marginTop:6}}>{fPer==="custom"?`${dIni?fmtDate(dIni):"início"} a ${dFim?fmtDate(dFim):"sem limite"}`:`${fmtDate(intervalo[0])} a ${fmtDate(intervalo[1])}`}</div>
         </div>
       </div>}
+      {fGrupo&&<FiltroPainel texto={GRUPOS_CLI[fGrupo]} onLimpar={()=>setFGrupo("")}/>}
       <div style={{fontSize:11,color:C.muted,fontFamily:FM,marginBottom:10}}>{filtered.length} cliente(s)</div>
       {filtered.length===0&&<div style={{textAlign:"center",padding:40,color:C.muted}}>Nenhum cliente encontrado.</div>}
       {filtered.map(c=>{
@@ -1461,15 +1484,16 @@ function LeadDetalhe({ lead, followUps, onBack, onSave, onSaveFollowUp, onDelFol
   );
 }
 
-function LeadsList({ leads, followUps, onNew, onSaveLead, onSaveFollowUp, onDelFollowUp, onConvert }) {
+function LeadsList({ leads, followUps, onNew, onSaveLead, onSaveFollowUp, onDelFollowUp, onConvert, preset = {} }) {
   const [search, setSearch] = useState("");
-  const [fTemp, setFTemp] = useState("");
+  const [fTemp, setFTemp] = useState(preset.temp||"");
   const [fStatus, setFStatus] = useState("");
+  const [fAtivos, setFAtivos] = useState(!!preset.ativos);
   const [selected, setSelected] = useState(null);
 
   const filtered = leads.filter(l=>{
     const q=search.toLowerCase();
-    return(!q||l.nome?.toLowerCase().includes(q)||String(l.telefone).includes(q))&&(!fTemp||l.temperatura===fTemp)&&(!fStatus||l.status===fStatus);
+    return(!q||l.nome?.toLowerCase().includes(q)||String(l.telefone).includes(q))&&(!fTemp||l.temperatura===fTemp)&&(!fStatus||l.status===fStatus)&&(!fAtivos||!["Convertido","Perdido"].includes(l.status));
   });
 
   const col = (label,items,color,empty) => (
@@ -1509,6 +1533,7 @@ function LeadsList({ leads, followUps, onNew, onSaveLead, onSaveFollowUp, onDelF
         <div style={{flex:"1 1 150px"}}><label style={S.lbl}>Status</label><select style={S.sel} value={fStatus} onChange={e=>setFStatus(e.target.value)}><option value="">Todos</option>{STATUS_LEAD.map(s=><option key={s}>{s}</option>)}</select></div>
         <button style={S.btn("primary")} onClick={onNew}>+ Novo Lead</button>
       </div>
+      {fAtivos&&<FiltroPainel texto="Leads ativos (sem convertidos e perdidos)" onLimpar={()=>setFAtivos(false)}/>}
       <div style={{display:"flex",gap:12,overflowX:"auto",paddingBottom:8}}>
         {col("🔥 Quentes",quentes,C.danger,"Nenhum lead quente")}
         {col("🟡 Mornos",mornos,C.warn,"Nenhum lead morno")}
@@ -1603,6 +1628,8 @@ export default function App() {
   const [mensagens, setMensagens] = useState([]);
   const [timeline, setTimeline] = useState([]);
   const [view, setView] = useState("dashboard");
+  const [preset, setPreset] = useState({ v:0, f:{} });
+  const irPara = (v, f={}) => { setPreset(p=>({ v:p.v+1, f })); setSelectedClient(null); setView(v); window.scrollTo(0,0); };
   const [selectedClient, setSelectedClient] = useState(null);
   const [showNewClient, setShowNewClient] = useState(false);
   const [showNewLead, setShowNewLead] = useState(false);
@@ -1752,7 +1779,7 @@ export default function App() {
         </div>
         <nav style={S.nav}>
           {navItems.map(n=>(
-            <button key={n.key} style={S.navBtn(view===n.key&&!selectedClient)} onClick={()=>{setView(n.key);setSelectedClient(null);}}>
+            <button key={n.key} style={S.navBtn(view===n.key&&!selectedClient)} onClick={()=>irPara(n.key)}>
               {n.label}
               {n.key==="leads"&&leadsQ>0?` 🔥${leadsQ}`:""}
               {n.key==="agenda"&&pendAgenda>0?` (${pendAgenda})`:""}
@@ -1786,9 +1813,10 @@ export default function App() {
             onSelectClient={c=>{setSelectedClient(c);}}
             onNewClient={()=>setShowNewClient(true)}
             onNewLead={()=>{setView("leads");setShowNewLead(true);}}
+            onIr={irPara}
           />
         ) : view==="leads" ? (
-          <LeadsList leads={leads} followUps={followUps}
+          <LeadsList key={"l"+preset.v} preset={preset.f} leads={leads} followUps={followUps}
             onNew={()=>setShowNewLead(true)}
             onSaveLead={saveLead}
             onSaveFollowUp={saveFollowUp}
@@ -1796,7 +1824,7 @@ export default function App() {
             onConvert={convertLead}
           />
         ) : view==="clientes" ? (
-          <ClientesList clients={clients} tarefas={tarefas} onSelect={c=>setSelectedClient(c)} onNew={()=>setShowNewClient(true)}/>
+          <ClientesList key={"c"+preset.v} preset={preset.f} clients={clients} tarefas={tarefas} onSelect={c=>setSelectedClient(c)} onNew={()=>setShowNewClient(true)}/>
         ) : view==="agenda" ? (
           <AgendaGlobal clients={clients} leads={leads} tarefas={tarefas} followUps={followUps}
             onSaveTarefa={saveTarefa} onDelTarefa={delTarefa} onSaveFollowUp={saveFollowUp}
