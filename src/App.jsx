@@ -17,7 +17,7 @@ const FB = "'IBM Plex Sans', sans-serif";
 const FM = "'IBM Plex Mono', monospace";
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
-const STATUS_CLI = ["Novo cliente","Documentação pendente","Aguardando perícia","Em análise INSS","Recurso em andamento","Benefício concedido","Encerrado"];
+const STATUS_CLI = ["Novo cliente","Documentação pendente","Aguardando perícia","Em análise INSS","Recurso em andamento","Benefício concedido","Benefício indeferido","Encerrado"];
 const BENEFICIOS = ["Aposentadoria por Invalidez","Aposentadoria por Tempo de Contribuição","Aposentadoria por Idade","Benefício de Prestação Continuada (BPC/LOAS)","Auxílio-Doença","Auxílio-Acidente","Pensão por Morte","Salário-Maternidade","Revisão de Benefício"];
 const TEMP_OPTS = ["🔥 Quente","🟡 Morno","❄️ Frio"];
 const ORIGEM_OPTS = ["Instagram","WhatsApp","Indicação","Facebook","Google","Presencial","Outro"];
@@ -26,7 +26,7 @@ const ESTADO_CIVIL = ["Solteiro(a)","Casado(a)","Divorciado(a)","Viúvo(a)","Uni
 const NACIONALIDADES = ["brasileiro(a)","brasileira naturalizada","estrangeiro(a)"];
 const TIMELINE_TIPOS = ["Protocolo INSS","Perícia agendada","Perícia realizada","Exigência cumprida","Recurso interposto","Decisão administrativa","Ação judicial ajuizada","Sentença","Benefício concedido","Benefício indeferido","Outro"];
 
-const statusColor = { "Novo cliente":C.info,"Documentação pendente":C.warn,"Aguardando perícia":C.purple,"Em análise INSS":C.accent,"Recurso em andamento":C.danger,"Benefício concedido":C.success,"Encerrado":C.muted };
+const statusColor = { "Novo cliente":C.info,"Documentação pendente":C.warn,"Aguardando perícia":C.purple,"Em análise INSS":C.accent,"Recurso em andamento":C.danger,"Benefício concedido":C.success,"Benefício indeferido":C.danger,"Encerrado":C.muted };
 const tempColor = { "🔥 Quente":C.danger,"🟡 Morno":C.warn,"❄️ Frio":C.info };
 const leadStatusColor = { "Novo contato":C.info,"Em negociação":C.accent,"Proposta enviada":C.purple,"Aguardando retorno":C.warn,"Convertido":C.success,"Perdido":C.muted };
 
@@ -54,6 +54,10 @@ const api = {
   upsert: (entity, data) => chamarSheets(`action=upsert${cap(entity)}`, data),
   del: (entity, id) => chamarSheets(`action=delete${cap(entity)}&id=${encodeURIComponent(id)}`),
 };
+
+// Indeferido: os honorários contratados não entram no faturamento; só conta o que de fato foi pago
+function ehIndeferido(c) { return /indeferid/i.test(String(c?.status||"")); }
+function valorFaturavel(c) { return ehIndeferido(c) ? recebidoCli(c) : (Number(c.valorHonorarios)||0); }
 
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
@@ -838,6 +842,7 @@ function Parcelas({ cliente, onChange }) {
         </div>
       </div>
 
+      {ehIndeferido(cliente)&&<div style={{marginBottom:8,fontSize:11,color:C.danger,fontFamily:FM}}>Benefício indeferido: o saldo em aberto não entra no faturamento nem no "A receber" do painel. Só o que já foi pago conta como receita.</div>}
       <Prog pct={pct} color={pct>=100?C.success:C.accent}/>
       <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:6,fontSize:11,fontFamily:FM,marginTop:5,color:C.muted}}>
         <span style={{color:C.success}}>Recebido: {fmtCur(recebido)}</span>
@@ -917,19 +922,22 @@ function Faturamento({ clients, onIr }) {
 
   const doPeriodo = clients.filter(c => noPeriodo(diaISO(c.dataCadastro)));
   const sel = doPeriodo.filter(c => !ben || c.beneficio === ben);
-  const contratado = sel.reduce((t,c)=>t+(Number(c.valorHonorarios)||0),0);
+  const contratado = sel.reduce((t,c)=>t+valorFaturavel(c),0);
+  const indef = sel.filter(ehIndeferido);
+  const indefValor = indef.reduce((t,c)=>t+(Number(c.valorHonorarios)||0)-recebidoCli(c),0);
   const recebidoContratos = sel.reduce((t,c)=>t+recebidoCli(c),0);
   const aReceber = Math.max(contratado - recebidoContratos, 0);
   // Dinheiro que entrou no período (pela data de pagamento das parcelas), de qualquer contrato
   const entrou = clients.filter(c=>!ben||c.beneficio===ben).reduce((t,c)=>t+lerParcelas(c).filter(p=>p.pago && (iv ? noPeriodo(p.dataPgto) : true)).reduce((s,p)=>s+(Number(p.valor)||0),0),0);
-  const ticket = sel.length ? contratado / sel.length : 0;
+  const nValidos = sel.length - indef.length;
+  const ticket = nValidos ? sel.filter(c=>!ehIndeferido(c)).reduce((t,c)=>t+valorFaturavel(c),0) / nValidos : 0;
 
   // Agrupamento por benefício (contratos do período)
   const mapa = {};
   doPeriodo.forEach(c => {
     const k = c.beneficio || "Sem benefício";
     const m = mapa[k] || (mapa[k] = { nome:k, contratado:0, recebido:0, n:0 });
-    m.contratado += Number(c.valorHonorarios)||0; m.recebido += recebidoCli(c); m.n++;
+    m.contratado += valorFaturavel(c); m.recebido += recebidoCli(c); m.n++; if (ehIndeferido(c)) m.indef=(m.indef||0)+1;
   });
   let linhas = Object.values(mapa).sort((a,b)=>b.contratado-a.contratado);
   if (linhas.length > 8) {
@@ -953,7 +961,8 @@ function Faturamento({ clients, onIr }) {
         <div>
           <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Faturamento {ben?`· ${ben}`:"· todos os benefícios"}</div>
           <div style={{fontFamily:FD,fontSize:34,color:C.accentLight,lineHeight:1.1}}>{fmtCur(contratado)}</div>
-          <div style={{fontSize:11,color:C.muted,fontFamily:FM}}>honorários contratados {iv?`de ${fmtDate(iv[0])} a ${fmtDate(iv[1])}`:"em todo o período"} · {sel.length} contrato(s)</div>
+          <div style={{fontSize:11,color:C.muted,fontFamily:FM}}>honorários contratados {iv?`de ${fmtDate(iv[0])} a ${fmtDate(iv[1])}`:"em todo o período"} · {nValidos} contrato(s)</div>
+          {indef.length>0&&<div className="card-click" onClick={()=>onIr("clientes",{status:"Benefício indeferido"})} title="Ver clientes indeferidos" style={{display:"inline-block",marginTop:4,fontSize:11,color:C.danger,fontFamily:FM,cursor:"pointer",border:`1px solid transparent`,borderRadius:6,padding:"1px 4px"}}>− {indef.length} indeferido(s) fora do faturamento ({fmtCur(indefValor)}) →</div>}
         </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
           <div><label style={S.lbl}>Período</label><select style={{...S.sel,minWidth:150}} value={per} onChange={e=>setPer(e.target.value)}>{PERIODOS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
@@ -969,7 +978,7 @@ function Faturamento({ clients, onIr }) {
         {kpi("Recebido no período", fmtCur(entrou), "clique para ver de onde veio →", C.success, ["recebimentos",{per, dIni, dFim, ben}])}
         {kpi("A receber destes contratos", fmtCur(aReceber), `já pago: ${fmtCur(recebidoContratos)}`, C.danger, ["clientes",{grupo:"areceber"}])}
         {kpi("Ticket médio", fmtCur(ticket), "por contrato", C.text)}
-        {kpi("Contratos", String(sel.length), ben?"deste benefício":"no período", C.info, ["clientes",{}])}
+        {kpi("Contratos", String(nValidos), indef.length?`+ ${indef.length} indeferido(s) excluído(s)`:(ben?"deste benefício":"no período"), C.info, ["clientes",{}])}
       </div>
 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:8}}>
@@ -999,11 +1008,11 @@ function Faturamento({ clients, onIr }) {
             {hover===i&&(
               <div style={{position:"absolute",right:4,top:"100%",zIndex:5,background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",fontSize:11,lineHeight:1.6,boxShadow:"0 6px 18px #0008",pointerEvents:"none",minWidth:190}}>
                 <div style={{color:C.text,fontWeight:700,marginBottom:2}}>{l.nome}</div>
-                <div style={{color:C.muted}}>Contratos: <b style={{color:C.text}}>{l.n}</b></div>
+                <div style={{color:C.muted}}>Contratos: <b style={{color:C.text}}>{l.n-(l.indef||0)}</b>{l.indef?<span style={{color:C.danger}}> (+{l.indef} indeferido)</span>:null}</div>
                 <div style={{color:C.muted}}>Contratado: <b style={{color:C.text}}>{fmtCur(l.contratado)}</b></div>
                 <div style={{color:C.muted}}><span style={{display:"inline-block",width:8,height:8,background:COR_RECEBIDO,borderRadius:2,marginRight:4}}/>Recebido: <b style={{color:C.text}}>{fmtCur(rec)}</b></div>
                 <div style={{color:C.muted}}><span style={{display:"inline-block",width:8,height:8,background:COR_ARECEBER,borderRadius:2,marginRight:4}}/>A receber: <b style={{color:C.text}}>{fmtCur(pend)}</b></div>
-                <div style={{color:C.muted}}>Ticket médio: <b style={{color:C.text}}>{fmtCur(l.contratado/(l.n||1))}</b></div>
+                <div style={{color:C.muted}}>Ticket médio: <b style={{color:C.text}}>{fmtCur(l.contratado/((l.n-(l.indef||0))||1))}</b></div>
               </div>
             )}
           </div>
@@ -1145,9 +1154,9 @@ function Recebimentos({ clients, onSelect, preset = {} }) {
 
 function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNewLead, onIr = ()=>{} }) {
   const total = clients.length;
-  const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)).length;
+  const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)&&!ehIndeferido(c)).length;
   const concedidos = clients.filter(c=>c.status==="Benefício concedido").length;
-  const recTotal = clients.reduce((s,c)=>s+(Number(c.valorHonorarios)||0),0);
+  const recTotal = clients.reduce((s,c)=>s+valorFaturavel(c),0);
   const recebido = clients.reduce((s,c)=>s+lerParcelas(c).filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0),0);
   const lAtivos = leads.filter(l=>l.status!=="Convertido"&&l.status!=="Perdido").length;
   const lQuentes = leads.filter(l=>l.temperatura==="🔥 Quente"&&l.status!=="Convertido"&&l.status!=="Perdido").length;
@@ -1248,8 +1257,8 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
 const GRUPOS_CLI = { ativos:"Processos ativos", areceber:"Com valor a receber", pagantes:"Com pagamento recebido" };
 function recebidoCli(c) { return lerParcelas(c).filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0); }
 function noGrupo(c, g) {
-  if (g==="ativos") return !["Encerrado","Benefício concedido"].includes(c.status);
-  if (g==="areceber") return (Number(c.valorHonorarios)||0) - recebidoCli(c) > 0.009;
+  if (g==="ativos") return !["Encerrado","Benefício concedido"].includes(c.status) && !ehIndeferido(c);
+  if (g==="areceber") return valorFaturavel(c) - recebidoCli(c) > 0.009;
   if (g==="pagantes") return recebidoCli(c) > 0;
   return true;
 }
@@ -1280,7 +1289,7 @@ function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
       &&(!intervalo||(dc&&dc>=intervalo[0]&&dc<=intervalo[1]))
       &&(!fGrupo||noGrupo(c,fGrupo));
   }).sort((a,b)=>diaISO(b.dataCadastro).localeCompare(diaISO(a.dataCadastro)));
-  const totalHon = filtered.reduce((t,c)=>t+(Number(c.valorHonorarios)||0),0);
+  const totalHon = filtered.reduce((t,c)=>t+valorFaturavel(c),0);
   const totalRec = filtered.reduce((t,c)=>t+recebidoCli(c),0);
 
   const exportCSV = () => {
