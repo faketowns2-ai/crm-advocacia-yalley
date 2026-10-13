@@ -1,3 +1,4 @@
+import { tokenValido } from "./_lib/auth.js";
 // Proxy seguro de IA (OCR e mensagens). As chaves ficam nas variáveis de ambiente
 // do Vercel e nunca aparecem no navegador.
 //   ANTHROPIC_API_KEY  -> usa Claude (modelo em ANTHROPIC_MODEL, opcional)
@@ -52,6 +53,7 @@ async function viaOpenAI(key, maxTokens, messages) {
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return erro(res, 405, "Método não permitido");
+  if (!tokenValido(req)) return erro(res, 401, "Sessão expirada. Entre novamente.");
 
   const origin = req.headers.origin || "";
   const host = req.headers.host || "";
