@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import PizZip from "pizzip";
+import Docxtemplater from "docxtemplater";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycby3VGOv4dSFIayqIFzcEYm-2f52KFsV-KYKsyIZHu8eibgXnZLomdhqy4_wwRNbOKEFDQ/exec";
@@ -92,6 +94,58 @@ function intervaloPeriodo(periodo, ini, fim) {
 }
 
 // ─── DOCUMENTOS ───────────────────────────────────────────────────────────────
+// ─── REPRESENTAÇÃO LEGAL (menor ou incapaz) ─────────────────────────────────
+const REP_TIPOS = {
+  impubere: "Menor de 16 anos (representado)",
+  pubere: "16 ou 17 anos (assistido)",
+  curatela: "Maior incapaz (curatela)",
+};
+const REP_PARENTESCO = ["genitora","genitor","tutora","tutor","curadora","curador","guardiã","guardião","avó","avô"];
+function comPronome(v) { if (!v) return "seu(sua) representante legal"; return (/(ora|ã|avó|genitora|tutora|curadora)$/.test(v) ? "sua " : /(or|ão|avô|genitor)$/.test(v) ? "seu " : "seu(sua) ") + v; }
+function ehRepresentado(c) { const v = String(c?.representado||"").toLowerCase(); return v==="sim"||v==="true"; }
+function tipoRepresentacao(c) {
+  if (c.repTipo) return c.repTipo;
+  const i = calcIdade(diaISO(c.dataNascimento));
+  if (i !== "" && i < 16) return "impubere";
+  if (i !== "" && i < 18) return "pubere";
+  return "curatela";
+}
+function qualifPessoa(nome, p) {
+  const partes = [String(nome||"___________").toUpperCase(), p.nacionalidade || "brasileiro(a)"];
+  if (p.estadoCivil) partes.push(p.estadoCivil);
+  if (p.profissao) partes.push(p.profissao);
+  let t = partes.join(", ");
+  if (p.dataNascimento) t += `, nascido(a) em ${fmtDate(p.dataNascimento)}`;
+  t += `, inscrito(a) no CPF sob o n° ${p.cpf || "___________"}`;
+  if (p.rg) t += ` e RG n° ${p.rg}`;
+  return t;
+}
+function dadosRep(c) {
+  return { nacionalidade:c.repNacionalidade, estadoCivil:c.repEstadoCivil, profissao:c.repProfissao, dataNascimento:c.repDataNascimento, cpf:c.repCpf, rg:c.repRg };
+}
+// Qualificação completa da parte (com representante, quando houver)
+function qualificacaoParte(c) {
+  const end = c.endereco || "___________";
+  if (!ehRepresentado(c)) return `${qualifPessoa(c.nome, c)}, residente e domiciliado(a) na ${end}`;
+  const t = tipoRepresentacao(c);
+  const cond = t==="impubere" ? "menor impúbere" : t==="pubere" ? "menor púbere" : "maior civilmente incapaz";
+  const verbo = t==="pubere" ? "assistido(a)" : "representado(a)";
+  const parent = comPronome(c.repParentesco || (t==="curatela" ? "curador(a)" : ""));
+  const cli = { ...c, estadoCivil:"", profissao: t==="curatela" ? c.profissao : "" };
+  const endRep = c.repEndereco && normTxt(c.repEndereco)!==normTxt(end) ? `, residente e domiciliado(a) na ${c.repEndereco}` : "";
+  return `${qualifPessoa(c.nome, cli)}, ${cond}, residente e domiciliado(a) na ${end}, neste ato ${verbo} por ${parent}, ${qualifPessoa(c.repNome, dadosRep(c))}${endRep}`;
+}
+// Bloco de assinatura conforme o tipo de representação
+function blocoAssinatura(c, papel) {
+  const nm = String(c.nome||"___________").toUpperCase();
+  if (!ehRepresentado(c)) return `_________________________________________\n${nm}\n${papel}`;
+  const rep = String(c.repNome||"___________").toUpperCase();
+  const t = tipoRepresentacao(c);
+  if (t==="pubere") return `_________________________________________\n${nm}\n${papel}\n\n\n_________________________________________\n${rep}\nAssistente (${c.repParentesco||"representante legal"})`;
+  return `_________________________________________\n${rep}\n${c.repParentesco||"Representante legal"} de ${nm}\n${papel}`;
+}
+function assinanteNome(c) { return ehRepresentado(c) && tipoRepresentacao(c)!=="pubere" ? String(c.repNome||"").toUpperCase() : String(c.nome||"").toUpperCase(); }
+
 function gerarDoc(tipo, c) {
   const dt = new Date().toLocaleDateString("pt-BR",{day:"numeric",month:"long",year:"numeric"});
   const nm = (c.nome||"___________").toUpperCase();
@@ -105,12 +159,13 @@ function gerarDoc(tipo, c) {
   const hon = fmtCur(c.valorHonorarios);
   const parc = c.parcelamentoTotal || 1;
   const vp = fmtCur(c.parcelamentoValor || c.valorHonorarios);
+  const qual = qualificacaoParte(c);
 
-  if (tipo === "contrato") return `CONTRATO DE HONORÁRIOS ADVOCATÍCIOS\n\nContrato de Prestação de Serviços Advocatícios que fazem entre si, de um lado, ${nm}, ${nac}, ${ec}, ${prof}, inscrito(a) no CPF sob o n° ${cpf}, residente e domiciliado(a) na ${end}, doravante denominado(a) CONTRATANTE; e, de outro lado, YALLEY DA SILVA VASCONCELOS, Advogado, inscrito na OAB/AP n° 3262, com escritório profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098, doravante denominado CONTRATADO, ajustam o presente contrato mediante as cláusulas e condições seguintes.\n\nCLÁUSULA 1ª - DO OBJETO\n\nO presente contrato tem por objeto a prestação de serviços advocatícios consistentes na representação administrativa e/ou judicial perante o INSS e demais órgãos competentes, visando ao requerimento, concessão, restabelecimento ou conversão de ${ben}, inclusive com análise de documentos, elaboração de requerimentos, acompanhamento processual e adoção das medidas necessárias à efetivação do direito.\n\nParágrafo único. A interposição de recursos administrativos, ações judiciais autônomas, cumprimento de sentença, execução de valores atrasados ou quaisquer medidas não expressamente previstas dependerão de novo contrato específico.\n\nCLÁUSULA 2ª - DA REMUNERAÇÃO\n\nOs honorários advocatícios correspondem ao valor de ${hon}, a serem pagos em ${parc}x de ${vp}, observando-se a Tabela de Honorários da OAB/AP.\n\n§1°. O(A) CONTRATANTE pagará ao CONTRATADO o percentual de 30% (trinta por cento) sobre os valores retroativos recebidos, seja na via administrativa ou judicial.\n\n§2°. Os valores poderão ser quitados à vista ou mediante desconto direto dos valores retroativos, mediante autorização expressa.\n\n§3°. Eventuais despesas com certidões, cópias, perícias e custas judiciais correrão por conta do(a) CONTRATANTE, mediante apresentação de comprovantes.\n\n§4°. Caso necessária a propositura de ação judicial, os honorários ora pactuados abrangem também essa fase.\n\nCLÁUSULA 3ª - DO PAGAMENTO\n\nOs honorários somente serão devidos em caso de êxito total ou parcial.\n\n§1° - O pagamento deverá ocorrer no prazo máximo de 2 (dois) dias úteis após o crédito do benefício ou dos retroativos.\n\n§2° - O atraso no pagamento ensejará multa de 10% (dez por cento) e juros de mora de 1% (um por cento) ao mês.\n\n§3° - O(A) CONTRATANTE autoriza o CONTRATADO a reter diretamente os honorários no momento do levantamento dos valores.\n\nCLÁUSULA 4ª - DA DURAÇÃO E RESCISÃO\n\nO presente contrato vigorará até a conclusão definitiva do processo administrativo ou judicial.\n\n§1° - A rescisão imotivada pelo(a) CONTRATANTE implicará o pagamento integral dos honorários, nos termos do art. 22, §3°, da Lei n° 8.906/94.\n\n§2° - O não fornecimento de documentos e informações necessárias constitui descumprimento contratual, autorizando a rescisão imediata.\n\nCLÁUSULA 5ª - DO SIGILO E PROTEÇÃO DE DADOS\n\nO(A) CONTRATANTE autoriza o uso de seus dados pessoais e credenciais GOV.BR, exclusivamente para execução dos serviços contratados, conforme a Lei n° 13.709/2018 (LGPD).\n\nCLÁUSULA 6ª - DO FORO\n\nFica eleito o foro da Comarca de Macapá/AP para dirimir eventuais controvérsias.\n\nMacapá/AP, ${dt}.\n\n\n_________________________________________\n${nm}\nCONTRATANTE\n\n\n_________________________________________\nYALLEY DA SILVA VASCONCELOS\nOAB/AP n° 3262`;
+  if (tipo === "contrato") return `CONTRATO DE HONORÁRIOS ADVOCATÍCIOS\n\nContrato de Prestação de Serviços Advocatícios que fazem entre si, de um lado, ${qual}, doravante denominado(a) CONTRATANTE; e, de outro lado, YALLEY DA SILVA VASCONCELOS, Advogado, inscrito na OAB/AP n° 3262, com escritório profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098, doravante denominado CONTRATADO, ajustam o presente contrato mediante as cláusulas e condições seguintes.\n\nCLÁUSULA 1ª - DO OBJETO\n\nO presente contrato tem por objeto a prestação de serviços advocatícios consistentes na representação administrativa e/ou judicial perante o INSS e demais órgãos competentes, visando ao requerimento, concessão, restabelecimento ou conversão de ${ben}, inclusive com análise de documentos, elaboração de requerimentos, acompanhamento processual e adoção das medidas necessárias à efetivação do direito.\n\nParágrafo único. A interposição de recursos administrativos, ações judiciais autônomas, cumprimento de sentença, execução de valores atrasados ou quaisquer medidas não expressamente previstas dependerão de novo contrato específico.\n\nCLÁUSULA 2ª - DA REMUNERAÇÃO\n\nOs honorários advocatícios correspondem ao valor de ${hon}, a serem pagos em ${parc}x de ${vp}, observando-se a Tabela de Honorários da OAB/AP.\n\n§1°. O(A) CONTRATANTE pagará ao CONTRATADO o percentual de 30% (trinta por cento) sobre os valores retroativos recebidos, seja na via administrativa ou judicial.\n\n§2°. Os valores poderão ser quitados à vista ou mediante desconto direto dos valores retroativos, mediante autorização expressa.\n\n§3°. Eventuais despesas com certidões, cópias, perícias e custas judiciais correrão por conta do(a) CONTRATANTE, mediante apresentação de comprovantes.\n\n§4°. Caso necessária a propositura de ação judicial, os honorários ora pactuados abrangem também essa fase.\n\nCLÁUSULA 3ª - DO PAGAMENTO\n\nOs honorários somente serão devidos em caso de êxito total ou parcial.\n\n§1° - O pagamento deverá ocorrer no prazo máximo de 2 (dois) dias úteis após o crédito do benefício ou dos retroativos.\n\n§2° - O atraso no pagamento ensejará multa de 10% (dez por cento) e juros de mora de 1% (um por cento) ao mês.\n\n§3° - O(A) CONTRATANTE autoriza o CONTRATADO a reter diretamente os honorários no momento do levantamento dos valores.\n\nCLÁUSULA 4ª - DA DURAÇÃO E RESCISÃO\n\nO presente contrato vigorará até a conclusão definitiva do processo administrativo ou judicial.\n\n§1° - A rescisão imotivada pelo(a) CONTRATANTE implicará o pagamento integral dos honorários, nos termos do art. 22, §3°, da Lei n° 8.906/94.\n\n§2° - O não fornecimento de documentos e informações necessárias constitui descumprimento contratual, autorizando a rescisão imediata.\n\nCLÁUSULA 5ª - DO SIGILO E PROTEÇÃO DE DADOS\n\nO(A) CONTRATANTE autoriza o uso de seus dados pessoais e credenciais GOV.BR, exclusivamente para execução dos serviços contratados, conforme a Lei n° 13.709/2018 (LGPD).\n\nCLÁUSULA 6ª - DO FORO\n\nFica eleito o foro da Comarca de Macapá/AP para dirimir eventuais controvérsias.\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"CONTRATANTE")}\n\n\n_________________________________________\nYALLEY DA SILVA VASCONCELOS\nOAB/AP n° 3262`;
 
-  if (tipo === "hiposuficiencia") return `DECLARAÇÃO DE HIPOSSUFICIÊNCIA ECONÔMICA\n\nEu, ${nm}, ${nac}, ${ec}, ${prof}, inscrito(a) no CPF sob o n° ${cpf}, residente e domiciliado(a) na ${end}.\n\nDECLARO, para os devidos fins de direito, especialmente para instruir pedido de concessão dos benefícios da Justiça Gratuita, nos termos do artigo 98 do Código de Processo Civil e artigo 5°, inciso LXXIV, da Constituição Federal, que não possuo condições financeiras de arcar com as custas processuais, despesas judiciais e honorários advocatícios sem prejuízo do meu próprio sustento e de minha família.\n\nDeclaro ainda que as informações acima são verdadeiras, estando ciente de que a falsidade desta declaração poderá implicar nas sanções civis, penais e processuais cabíveis.\n\nTermos em que,\nPede deferimento.\n\nMacapá/AP, ${dt}.\n\n\n_________________________________________\n${nm}\nDECLARANTE`;
+  if (tipo === "hiposuficiencia") return `DECLARAÇÃO DE HIPOSSUFICIÊNCIA ECONÔMICA\n\nEu, ${qual}.\n\nDECLARO, para os devidos fins de direito, especialmente para instruir pedido de concessão dos benefícios da Justiça Gratuita, nos termos do artigo 98 do Código de Processo Civil e artigo 5°, inciso LXXIV, da Constituição Federal, que não possuo condições financeiras de arcar com as custas processuais, despesas judiciais e honorários advocatícios sem prejuízo do meu próprio sustento e de minha família.\n\nDeclaro ainda que as informações acima são verdadeiras, estando ciente de que a falsidade desta declaração poderá implicar nas sanções civis, penais e processuais cabíveis.\n\nTermos em que,\nPede deferimento.\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"DECLARANTE")}`;
 
-  if (tipo === "procuracao") return `PROCURAÇÃO\n\nOUTORGANTE: ${nm}, ${nac}, ${ec}, ${prof}, inscrito(a) no CPF sob o n° ${cpf}, residente e domiciliado(a) na ${end}.\n\nOUTORGADO: YALLEY DA SILVA VASCONCELOS, advogado, inscrito na OAB/AP n° 3262, com endereço profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098.\n\n\nA OUTORGANTE nomeia e constitui como seu bastante procurador o OUTORGADO, conferindo-lhe amplos, gerais e ilimitados poderes para representá-la ad judicia et ad extra, em todo o território nacional, POR PRAZO INDETERMINADO, em qualquer instância, juízo, tribunal ou órgão público ou privado, inclusive em processos físicos ou eletrônicos, podendo propor ações, acompanhar processos, apresentar defesa, confessar, reconhecer a procedência do pedido, transigir, desistir, renunciar a direitos, firmar compromissos, celebrar acordos, recorrer, firmar declarações, requerer, acompanhar e revisar benefícios previdenciários e assistenciais, solicitar perícias médicas, administrativas ou judiciais, praticar atos perante o INSS e demais órgãos públicos ou privados, receber valores, levantar alvarás, dar quitação, realizar peticionamento eletrônico, atuar em sistemas judiciais e administrativos, receber citações e intimações eletrônicas, utilizar certificação digital, acessar, tratar e compartilhar dados pessoais e dados sensíveis, nos limites da finalidade deste mandato, ratificando desde já todos os atos anteriormente praticados relacionados ao presente mandato, podendo, ainda, substabelecer, no todo ou em parte, com ou sem reserva de poderes.\n\nA presente procuração referente ao processo de ${ben} é firmada por meio de assinatura eletrônica, nos termos da MP n° 2.200-2/2001 e da Lei n° 14.063/2020, sendo plenamente válida para todos os fins legais.\n\n\nMacapá/AP, ${dt}.\n\n\n_________________________________________\n${nm}\nOUTORGANTE`;
+  if (tipo === "procuracao") return `PROCURAÇÃO\n\nOUTORGANTE: ${qual}.\n\nOUTORGADO: YALLEY DA SILVA VASCONCELOS, advogado, inscrito na OAB/AP n° 3262, com endereço profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098.\n\n\nA OUTORGANTE nomeia e constitui como seu bastante procurador o OUTORGADO, conferindo-lhe amplos, gerais e ilimitados poderes para representá-la ad judicia et ad extra, em todo o território nacional, POR PRAZO INDETERMINADO, em qualquer instância, juízo, tribunal ou órgão público ou privado, inclusive em processos físicos ou eletrônicos, podendo propor ações, acompanhar processos, apresentar defesa, confessar, reconhecer a procedência do pedido, transigir, desistir, renunciar a direitos, firmar compromissos, celebrar acordos, recorrer, firmar declarações, requerer, acompanhar e revisar benefícios previdenciários e assistenciais, solicitar perícias médicas, administrativas ou judiciais, praticar atos perante o INSS e demais órgãos públicos ou privados, receber valores, levantar alvarás, dar quitação, realizar peticionamento eletrônico, atuar em sistemas judiciais e administrativos, receber citações e intimações eletrônicas, utilizar certificação digital, acessar, tratar e compartilhar dados pessoais e dados sensíveis, nos limites da finalidade deste mandato, ratificando desde já todos os atos anteriormente praticados relacionados ao presente mandato, podendo, ainda, substabelecer, no todo ou em parte, com ou sem reserva de poderes.\n\nA presente procuração referente ao processo de ${ben} é firmada por meio de assinatura eletrônica, nos termos da MP n° 2.200-2/2001 e da Lei n° 14.063/2020, sendo plenamente válida para todos os fins legais.\n\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"OUTORGANTE")}`;
 
   return "Tipo não reconhecido.";
 }
@@ -479,6 +534,150 @@ function DocUpload({ onExtracted, atual = {} }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── CAMPOS DO REPRESENTANTE LEGAL ────────────────────────────────────────────
+function Representante({ form, setForm }) {
+  const ativo = ehRepresentado(form);
+  const idade = calcIdade(diaISO(form.dataNascimento));
+  const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  const tipo = ativo ? tipoRepresentacao(form) : "";
+  return (
+    <div style={{ border:`1px solid ${ativo?C.purple:C.border}`, borderRadius:10, padding:12, margin:"8px 0 12px", background: ativo?C.purple+"10":"transparent" }}>
+      <label style={{ display:"flex", gap:8, alignItems:"center", cursor:"pointer", fontSize:13, flexWrap:"wrap" }}>
+        <input type="checkbox" checked={ativo} onChange={e=>{ const on=e.target.checked; setForm(p=>({...p, representado: on?"sim":"", repTipo: on ? (p.repTipo || tipoRepresentacao({...p,repTipo:""})) : p.repTipo })); }}/>
+        <b>Cliente menor de idade ou incapaz</b>
+        <span style={{ color:C.muted, fontSize:11 }}>(documentos com o representante legal)</span>
+      </label>
+      {!ativo && idade!=="" && idade<18 && (
+        <div style={{ marginTop:6, fontSize:11, color:C.warn }}>Atenção: pela data de nascimento o cliente tem {idade} anos. Marque a opção acima e informe o representante legal.</div>
+      )}
+      {ativo && (
+        <div style={{ marginTop:10 }}>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))", gap:8 }}>
+            <F label="Situação"><select style={S.sel} value={tipo} onChange={e=>set("repTipo",e.target.value)}>{Object.entries(REP_TIPOS).map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></F>
+            <F label="Vínculo"><select style={S.sel} value={form.repParentesco||""} onChange={e=>set("repParentesco",e.target.value)}><option value="">Selecionar</option>{REP_PARENTESCO.map(r=><option key={r}>{r}</option>)}</select></F>
+            <F label="Nome do representante"><input style={S.inp} value={form.repNome||""} onChange={e=>set("repNome",e.target.value)}/></F>
+            <F label="CPF"><input style={S.inp} value={form.repCpf||""} onChange={e=>set("repCpf",e.target.value)}/></F>
+            <F label="RG"><input style={S.inp} value={form.repRg||""} onChange={e=>set("repRg",e.target.value)}/></F>
+            <F label="Data de nascimento"><input type="date" style={S.inp} value={diaISO(form.repDataNascimento)} onChange={e=>set("repDataNascimento",e.target.value)}/></F>
+            <F label="Nacionalidade"><select style={S.sel} value={form.repNacionalidade||""} onChange={e=>set("repNacionalidade",e.target.value)}><option value="">Selecionar</option>{NACIONALIDADES.map(n=><option key={n}>{n}</option>)}</select></F>
+            <F label="Estado civil"><select style={S.sel} value={form.repEstadoCivil||""} onChange={e=>set("repEstadoCivil",e.target.value)}><option value="">Selecionar</option>{ESTADO_CIVIL.map(n=><option key={n}>{n}</option>)}</select></F>
+            <F label="Profissão"><input style={S.inp} value={form.repProfissao||""} onChange={e=>set("repProfissao",e.target.value)}/></F>
+            <F label="Telefone"><input style={S.inp} value={form.repTelefone||""} onChange={e=>set("repTelefone",e.target.value)}/></F>
+          </div>
+          <F label="Endereço do representante (deixe vazio se for o mesmo do cliente)"><input style={S.inp} value={form.repEndereco||""} onChange={e=>set("repEndereco",e.target.value)}/></F>
+          <div style={{ fontSize:11, color:C.muted, marginTop:4, lineHeight:1.5 }}>
+            {tipo==="pubere" ? "16 e 17 anos: o cliente é ASSISTIDO e os dois assinam (cliente e representante)." : tipo==="impubere" ? "Menor de 16 anos: o cliente é REPRESENTADO e só o representante assina." : "Curatela: o curador assina. Confira se a sentença de curatela abrange atos previdenciários."}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── MODELOS .DOCX PREENCHIDOS COM O CADASTRO ─────────────────────────────────
+const MODELOS_KEY = "crm_modelos_docx";
+function lerModelos() { try { return JSON.parse(localStorage.getItem(MODELOS_KEY) || "[]"); } catch { return []; } }
+function gravarModelos(l) { try { localStorage.setItem(MODELOS_KEY, JSON.stringify(l)); return true; } catch { return false; } }
+function dadosModelo(c) {
+  const t = ehRepresentado(c) ? tipoRepresentacao(c) : "";
+  const parcelas = lerParcelas(c);
+  return {
+    nome: String(c.nome||"").toUpperCase(), cpf:c.cpf, rg:c.rg, dataNascimento: fmtDate(c.dataNascimento), idade: String(calcIdade(diaISO(c.dataNascimento))),
+    nacionalidade:c.nacionalidade, estadoCivil:c.estadoCivil, profissao:c.profissao, endereco:c.endereco, cep:c.cep, telefone:c.telefone, email:c.email,
+    beneficio:c.beneficio, numeroBeneficio:c.numeroBeneficio, status:c.status,
+    valorHonorarios: fmtCur(c.valorHonorarios), parcelas: String(c.parcelamentoTotal||1),
+    valorParcela: fmtCur(parcelas.find(p=>p.valor)?.valor || c.parcelamentoValor || c.valorHonorarios),
+    dataContrato: fmtDate(c.dataCadastro), dataHoje: fmtDate(hoje()),
+    dataExtenso: new Date().toLocaleDateString("pt-BR",{day:"numeric",month:"long",year:"numeric"}),
+    qualificacao: qualificacaoParte(c), qualificacaoCliente: qualifPessoa(c.nome, c) + `, residente e domiciliado(a) na ${c.endereco||"___________"}`,
+    assinante: assinanteNome(c),
+    representado: !!t, assistido: t==="pubere",
+    repNome: String(c.repNome||"").toUpperCase(), repCpf:c.repCpf, repRg:c.repRg, repDataNascimento: fmtDate(c.repDataNascimento),
+    repNacionalidade:c.repNacionalidade, repEstadoCivil:c.repEstadoCivil, repProfissao:c.repProfissao,
+    repEndereco: c.repEndereco || c.endereco, repTelefone:c.repTelefone, repParentesco:c.repParentesco,
+    qualificacaoRepresentante: c.repNome ? qualifPessoa(c.repNome, dadosRep(c)) : "",
+  };
+}
+const TAGS_MODELO = ["nome","cpf","rg","dataNascimento","idade","nacionalidade","estadoCivil","profissao","endereco","cep","telefone","email","beneficio","numeroBeneficio","valorHonorarios","parcelas","valorParcela","dataContrato","dataHoje","dataExtenso","qualificacao","qualificacaoCliente","assinante","repNome","repCpf","repRg","repParentesco","repEndereco","qualificacaoRepresentante"];
+
+function ModelosDocx({ cliente }) {
+  const [modelos, setModelos] = useState(lerModelos());
+  const [msg, setMsg] = useState(null);
+  const [verTags, setVerTags] = useState(false);
+  const ref = useRef();
+
+  const enviar = (f) => {
+    if (!f) return;
+    if (!/\.docx$/i.test(f.name)) { setMsg({erro:true, t:"Envie um arquivo .docx (Word). Arquivos .doc antigos precisam ser salvos como .docx."}); return; }
+    if (f.size > 1.5*1024*1024) { setMsg({erro:true, t:"Modelo muito grande (máx. 1,5MB). Remova imagens pesadas do arquivo."}); return; }
+    const fr = new FileReader();
+    fr.onload = e => {
+      const b64 = String(e.target.result).split(",")[1];
+      const nome = f.name.replace(/\.docx$/i,"");
+      const novo = [...modelos.filter(m=>m.nome!==nome), { id: uid(), nome, b64 }];
+      if (!gravarModelos(novo)) { setMsg({erro:true, t:"Sem espaço no navegador para guardar mais modelos. Exclua algum modelo antigo."}); return; }
+      setModelos(novo); setMsg({erro:false, t:`Modelo "${nome}" salvo.`});
+    };
+    fr.readAsDataURL(f);
+  };
+
+  const gerar = (m) => {
+    try {
+      const zip = new PizZip(atob(m.b64));
+      const doc = new Docxtemplater(zip, { paragraphLoop:true, linebreaks:true, delimiters:{ start:"{{", end:"}}" }, nullGetter: () => "________" });
+      doc.render(dadosModelo(cliente));
+      const out = doc.getZip().generate({ type:"blob", mimeType:"application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(out);
+      a.download = `${m.nome} - ${String(cliente.nome||"cliente").trim()}.docx`; a.click();
+      setMsg({erro:false, t:`"${m.nome}" gerado e baixado.`});
+    } catch (e) {
+      const errs = e?.properties?.errors?.map(x=>x.properties?.explanation).filter(Boolean);
+      setMsg({erro:true, t:"Erro no modelo: " + (errs?.length ? errs.slice(0,3).join(" | ") : (e.message||"desconhecido")) + ". Confira se as etiquetas estão escritas como {{nome}}."});
+    }
+  };
+
+  const excluir = (id) => { const n = modelos.filter(m=>m.id!==id); gravarModelos(n); setModelos(n); };
+  const code = (t) => <code style={{color:C.accentLight}}>{t}</code>;
+
+  return (
+    <div style={{ marginTop:18, paddingTop:14, borderTop:`1px solid ${C.border}` }}>
+      <div style={{ fontFamily:FD, fontSize:16, color:C.accentLight, marginBottom:8 }}>Meus modelos Word (.docx)</div>
+      <div onClick={()=>ref.current.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();enviar(e.dataTransfer.files[0]);}}
+        style={{ border:`2px dashed ${C.border}`, borderRadius:10, padding:16, textAlign:"center", cursor:"pointer", marginBottom:10 }}>
+        <div style={{ fontSize:22, marginBottom:4 }}>📄</div>
+        <div style={{ fontSize:13, color:C.muted }}>Enviar modelo .docx com etiquetas como {"{{nome}}"}, {"{{cpf}}"}, {"{{qualificacao}}"}</div>
+        <div style={{ fontSize:10, color:C.muted, fontFamily:FM }}>clique ou arraste · o modelo fica salvo neste navegador e serve para todos os clientes</div>
+        <input ref={ref} type="file" accept=".docx" style={{display:"none"}} onChange={e=>{enviar(e.target.files[0]); e.target.value="";}}/>
+      </div>
+      <div style={{ display:"flex", gap:14, flexWrap:"wrap", fontSize:11, marginBottom:10 }}>
+        <a href="/modelo-exemplo.docx" download style={{ color:C.info }}>↓ Baixar modelo de exemplo</a>
+        <button type="button" onClick={()=>setVerTags(!verTags)} style={{ background:"none", border:"none", color:C.info, cursor:"pointer", fontSize:11, padding:0 }}>{verTags?"Ocultar":"Ver"} lista de etiquetas</button>
+      </div>
+      {verTags && (
+        <div style={{ background:C.surface, borderRadius:8, padding:10, marginBottom:10, fontSize:11, lineHeight:1.8 }}>
+          <div style={{ color:C.muted, marginBottom:6 }}>Clique para copiar e cole no Word:</div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:5 }}>
+            {TAGS_MODELO.map(t=><button key={t} type="button" onClick={()=>{navigator.clipboard.writeText(`{{${t}}}`); setMsg({erro:false,t:`{{${t}}} copiado`});}} style={{ background:C.card, border:`1px solid ${C.border}`, borderRadius:6, color:C.accentLight, fontFamily:FM, fontSize:10, padding:"2px 7px", cursor:"pointer" }}>{`{{${t}}}`}</button>)}
+          </div>
+          <div style={{ color:C.muted, marginTop:8 }}>
+            {code("{{qualificacao}}")} traz a qualificação completa e já inclui o representante quando houver. {code("{{assinante}}")} é o nome de quem assina.
+            Texto só para cliente representado: {code("{{#representado}}")} texto {code("{{/representado}}")}. Só para quem não é representado: {code("{{^representado}}")} texto {code("{{/representado}}")}.
+          </div>
+        </div>
+      )}
+      {msg && <div style={{ marginBottom:10, fontSize:12, fontFamily:FM, color: msg.erro?C.danger:C.success }}>{msg.erro?"⚠ ":"✓ "}{msg.t}</div>}
+      {modelos.length===0 && <div style={{ fontSize:12, color:C.muted }}>Nenhum modelo salvo ainda.</div>}
+      {modelos.map(m=>(
+        <div key={m.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:`1px solid ${C.border}` }}>
+          <span style={{ flex:1, fontSize:13 }}>📝 {m.nome}</span>
+          <button style={{...S.btn("primary"),padding:"5px 12px"}} onClick={()=>gerar(m)}>Gerar e baixar</button>
+          <button onClick={()=>excluir(m.id)} title="Excluir modelo" style={{ background:"none", border:"none", color:C.danger, cursor:"pointer", fontSize:12 }}>✕</button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -903,8 +1102,6 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
 
   const save = async () => { setSaving(true); await onSave(form); setSaving(false); };
 
-  const gerarDoc = () => setDocText(gerarDoc_(docTipo, form));
-  function gerarDoc_(t, c) { return gerarDoc(t, c); }
 
   const [msgOrient, setMsgOrient] = useState("");
   const [msgArquivo, setMsgArquivo] = useState(null);
@@ -971,7 +1168,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
             <F label="CPF"><input style={S.inp} value={form.cpf||""} onChange={e=>setForm({...form,cpf:e.target.value})}/></F>
             <F label="RG"><input style={S.inp} value={form.rg||""} onChange={e=>setForm({...form,rg:e.target.value})}/></F>
             <F label="Data de Nascimento">
-              <input style={S.inp} type="date" value={form.dataNascimento||""} onChange={e=>setForm({...form,dataNascimento:e.target.value})}/>
+              <input style={S.inp} type="date" value={diaISO(form.dataNascimento)} onChange={e=>setForm({...form,dataNascimento:e.target.value})}/>
               {form.dataNascimento&&<div style={{fontSize:10,color:C.muted,marginTop:3,fontFamily:FM}}>{calcIdade(form.dataNascimento)} anos</div>}
             </F>
             <F label="Nacionalidade"><select style={S.sel} value={form.nacionalidade||""} onChange={e=>setForm({...form,nacionalidade:e.target.value})}><option value="">Selecionar</option>{NACIONALIDADES.map(n=><option key={n}>{n}</option>)}</select></F>
@@ -986,6 +1183,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
           </div>
           <F label="CEP"><CepInput value={form.cep||""} onChange={v=>setForm({...form,cep:v})} onEnderecoFound={e=>setForm(p=>({...p,endereco:e}))}/></F>
           <F label="Endereço Completo"><input style={S.inp} value={form.endereco||""} onChange={e=>setForm({...form,endereco:e.target.value})}/></F>
+          <Representante form={form} setForm={setForm}/>
           <F label="Observações"><textarea style={{...S.textarea,minHeight:70}} value={form.observacoes||""} onChange={e=>setForm({...form,observacoes:e.target.value})}/></F>
           <div style={{display:"flex",justifyContent:"flex-end",marginTop:12}}>
             <button style={S.btn("primary")} onClick={save} disabled={saving}>{saving?"Salvando...":"Salvar Alterações"}</button>
@@ -1028,6 +1226,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
               </div>
             </div>
           )}
+          <ModelosDocx cliente={form}/>
         </div>
       )}
 
@@ -1141,7 +1340,7 @@ function NovoCliente({ onSave, onCancel }) {
           <F label="Nome *"><input style={S.inp} value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})}/></F>
           <F label="CPF *"><input style={S.inp} value={form.cpf} onChange={e=>setForm({...form,cpf:e.target.value})} placeholder="000.000.000-00"/></F>
           <F label="RG"><input style={S.inp} value={form.rg} onChange={e=>setForm({...form,rg:e.target.value})}/></F>
-          <F label="Nascimento"><input style={S.inp} type="date" value={form.dataNascimento} onChange={e=>setForm({...form,dataNascimento:e.target.value})}/></F>
+          <F label="Nascimento"><input style={S.inp} type="date" value={diaISO(form.dataNascimento)} onChange={e=>setForm({...form,dataNascimento:e.target.value})}/></F>
           <F label="Nacionalidade"><select style={S.sel} value={form.nacionalidade} onChange={e=>setForm({...form,nacionalidade:e.target.value})}>{NACIONALIDADES.map(n=><option key={n}>{n}</option>)}</select></F>
           <F label="Estado Civil"><select style={S.sel} value={form.estadoCivil} onChange={e=>setForm({...form,estadoCivil:e.target.value})}><option value="">Selecionar</option>{ESTADO_CIVIL.map(n=><option key={n}>{n}</option>)}</select></F>
           <F label="Profissão"><input style={S.inp} value={form.profissao} onChange={e=>setForm({...form,profissao:e.target.value})}/></F>
@@ -1153,6 +1352,7 @@ function NovoCliente({ onSave, onCancel }) {
         </div>
         <F label="CEP"><CepInput value={form.cep} onChange={v=>setForm({...form,cep:v})} onEnderecoFound={e=>setForm(p=>({...p,endereco:e}))}/></F>
         <F label="Endereço"><input style={S.inp} value={form.endereco} onChange={e=>setForm({...form,endereco:e.target.value})}/></F>
+        <Representante form={form} setForm={setForm}/>
         <F label="Observações"><textarea style={{...S.textarea,minHeight:60}} value={form.observacoes} onChange={e=>setForm({...form,observacoes:e.target.value})}/></F>
         <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}>
           <button style={S.btn("ghost")} onClick={onCancel}>Cancelar</button>
