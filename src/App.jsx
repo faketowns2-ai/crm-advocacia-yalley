@@ -1160,6 +1160,301 @@ function Recebimentos({ clients, onSelect, preset = {} }) {
   );
 }
 
+// ─── GESTÃO E METAS ───────────────────────────────────────────────────────────
+const MOTIVOS_INDEF = ["Falta de qualidade de segurado","Carência não cumprida","Atividade rural não comprovada","Perícia desfavorável (incapacidade não constatada)","Renda per capita acima do limite","Exigência não cumprida / falta de documentos","Dependência não comprovada","Não comparecimento à perícia","Outro"];
+const FASES = ["Administrativa","Judicial"];
+const MESES = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+
+function semestreDe(d) { if (!d) return ""; const [y,m] = d.split("-").map(Number); return `${y}-${m<=6?1:2}`; }
+function rotuloSem(s) { const [y,n]=s.split("-"); return `${n}º semestre ${y}`; }
+function mesesDoSem(s) { const [y,n]=s.split("-").map(Number); return Array.from({length:6},(_,i)=>`${y}-${String((n-1)*6+i+1).padStart(2,"0")}`); }
+const pct = (a,b) => b ? Math.round(a/b*100) : null;
+const fmtPct = (v) => v===null||v===undefined ? "—" : `${v}%`;
+
+// Normaliza os dados de gestão de um cliente (campos próprios + histórico processual como apoio)
+function metricas(c, timeline) {
+  const tl = timeline.filter(e => String(e.clienteId)===String(c.id));
+  const dataTl = (re) => { const e = tl.filter(x=>re.test(x.tipo||"")).sort((a,b)=>String(a.data).localeCompare(String(b.data)))[0]; return e ? diaISO(e.data) : ""; };
+  const contrato = diaISO(c.dataCadastro);
+  const protocolo = diaISO(c.dataProtocolo) || dataTl(/Protocolo/i);
+  const judicial = c.via ? c.via==="Judicial" : tl.some(e=>/judicial|Senten/i.test(e.tipo||""));
+  const resultado = /concedid/i.test(c.status||"") ? "concedido" : ehIndeferido(c) ? "indeferido" : "";
+  const decisao = resultado ? (diaISO(c.dataDecisao) || dataTl(resultado==="concedido"?/concedido|Senten/i:/indeferido|Decis/i) || protocolo || contrato) : "";
+  return { c, produto: c.beneficio || "Sem benefício", contrato, protocolo, via: judicial ? "Judicial" : "Administrativa", resultado, decisao, origem: c.origem || "Não informada", resp: c.responsavel || "Não informado", motivo: c.motivoIndeferimento || "Não informado", valor: valorFaturavel(c) };
+}
+
+function GestaoProcesso({ form, setForm }) {
+  const set = (k,v) => setForm(p=>({...p,[k]:v}));
+  return (
+    <div style={{ border:`1px solid ${C.border}`, borderRadius:10, padding:12, margin:"8px 0 12px" }}>
+      <div style={{ fontSize:12, fontWeight:700, color:C.accentLight, marginBottom:8 }}>Gestão do processo (alimenta o painel de metas)</div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:8 }}>
+        <F label="Meio de prospecção"><select style={S.sel} value={form.origem||""} onChange={e=>set("origem",e.target.value)}><option value="">Selecionar</option>{[...new Set([form.origem,...ORIGEM_OPTS].filter(Boolean))].map(o=><option key={o}>{o}</option>)}</select></F>
+        <F label="Responsável / vendedora"><input style={S.inp} value={form.responsavel||""} onChange={e=>set("responsavel",e.target.value)} placeholder="Quem fechou o contrato"/></F>
+        <F label="Fase"><select style={S.sel} value={form.via||""} onChange={e=>set("via",e.target.value)}><option value="">Automática</option>{FASES.map(f=><option key={f}>{f}</option>)}</select></F>
+        <F label="Data do protocolo"><input type="date" style={S.inp} value={diaISO(form.dataProtocolo)} onChange={e=>set("dataProtocolo",e.target.value)}/></F>
+        <F label="Data da decisão"><input type="date" style={S.inp} value={diaISO(form.dataDecisao)} onChange={e=>set("dataDecisao",e.target.value)}/></F>
+        {ehIndeferido(form) && <F label="Motivo do indeferimento"><select style={S.sel} value={form.motivoIndeferimento||""} onChange={e=>set("motivoIndeferimento",e.target.value)}><option value="">Selecionar</option>{[...new Set([form.motivoIndeferimento,...MOTIVOS_INDEF].filter(Boolean))].map(m=><option key={m}>{m}</option>)}</select></F>}
+      </div>
+    </div>
+  );
+}
+
+function Kpi({ rotulo, valor, sub, cor }) {
+  return (
+    <div style={{flex:"1 1 150px",background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px"}}>
+      <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>{rotulo}</div>
+      <div style={{fontSize:22,fontWeight:700,color:cor||C.text,fontFamily:FD}}>{valor}</div>
+      {sub&&<div style={{fontSize:10,color:C.muted,fontFamily:FM}}>{sub}</div>}
+    </div>
+  );
+}
+function Tabela({ cols, linhas, onRow }) {
+  return (
+    <div style={{overflowX:"auto"}}>
+      <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:560}}>
+        <thead><tr style={{color:C.muted,fontFamily:FM,fontSize:10,textTransform:"uppercase"}}>{cols.map((c,i)=><th key={i} style={{textAlign:i?"right":"left",padding:6,whiteSpace:"nowrap"}}>{c}</th>)}</tr></thead>
+        <tbody>{linhas.map((l,i)=>(
+          <tr key={i} onClick={onRow?()=>onRow(l):undefined} className={onRow?"card-click":""} style={{borderTop:`1px solid ${C.border}`,cursor:onRow?"pointer":"default"}}>
+            {l.cells.map((v,j)=><td key={j} style={{padding:6,textAlign:j?"right":"left",fontFamily:j?FM:FB,whiteSpace:j?"nowrap":"normal",fontWeight:j?400:600}}>{v}</td>)}
+          </tr>))}</tbody>
+      </table>
+    </div>
+  );
+}
+
+function Gestao({ clients, leads, timeline, metas, onSaveMeta, onSelect }) {
+  const [aba, setAba] = useState("panorama");
+  const ms = clients.map(c=>metricas(c, timeline));
+  const semAtual = semestreDe(hoje());
+  const sems = [...new Set([semAtual, ...ms.map(m=>semestreDe(m.contrato)).filter(Boolean)])].sort().reverse();
+  const [sem, setSem] = useState(semAtual);
+  const [mes, setMes] = useState(hoje().slice(0,7));
+  const [sub, setSub] = useState("protocolos");
+  const meses = mesesDoSem(sem);
+  const mesSel = meses.includes(mes) ? mes : (meses.includes(hoje().slice(0,7)) ? hoje().slice(0,7) : meses[meses.length-1]);
+
+  const noSem = (d) => d && semestreDe(d)===sem;
+  const noMes = (d) => d && d.slice(0,7)===mesSel;
+  const produtos = [...new Set(ms.map(m=>m.produto))].sort();
+  const metaDe = (p) => metas.find(x=>x.semestre===sem && x.produto===p) || {};
+
+  const resumo = (lista, filtroData) => {
+    const contr = lista.filter(m=>filtroData(m.contrato));
+    const prot = lista.filter(m=>filtroData(m.protocolo));
+    const dec = lista.filter(m=>m.resultado && filtroData(m.decisao));
+    const conc = dec.filter(m=>m.resultado==="concedido");
+    const ind = dec.filter(m=>m.resultado==="indeferido");
+    const adm = dec.filter(m=>m.via==="Administrativa"), jud = dec.filter(m=>m.via==="Judicial");
+    const contrValidos = contr.filter(m=>!ehIndeferido(m.c));
+    return {
+      contratos: contr.length, protocolos: prot.length, concessoes: conc.length, indeferidos: ind.length, decididos: dec.length,
+      faturamento: contr.reduce((s,m)=>s+m.valor,0),
+      ticket: contrValidos.length ? contrValidos.reduce((s,m)=>s+m.valor,0)/contrValidos.length : 0,
+      taxaProt: pct(prot.length, contr.length),
+      taxaConcAdm: pct(adm.filter(m=>m.resultado==="concedido").length, adm.length),
+      procJud: pct(jud.filter(m=>m.resultado==="concedido").length, jud.length),
+      taxaIndef: pct(ind.length, dec.length),
+      listas: { contr, prot, conc, ind },
+    };
+  };
+  const tot = resumo(ms, noSem);
+  const porProd = produtos.map(p => ({ p, r: resumo(ms.filter(m=>m.produto===p), noSem), rm: resumo(ms.filter(m=>m.produto===p), noMes), meta: metaDe(p) }))
+    .filter(x => x.r.contratos||x.r.protocolos||x.r.decididos||x.meta.metaContratos||x.meta.metaProtocolos)
+    .sort((a,b)=>b.r.contratos-a.r.contratos);
+  const agrupar = (campo) => { const m={}; ms.filter(x=>noSem(x.contrato)).forEach(x=>{ const k=x[campo]; (m[k]=m[k]||[]).push(x); }); return Object.entries(m).map(([k,l])=>({k,l,r:resumo(l,noSem)})).sort((a,b)=>b.r.contratos-a.r.contratos); };
+
+  const abas = [["panorama","Panorama"],["mensal","Análise mensal"],["indeferimentos","Indeferimentos"],["equipe","Equipe"],["prospeccao","Prospecção"],["crescimento","Crescimento"],["metas","Metas do semestre"]];
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:10,marginBottom:14}}>
+        <div>
+          <h2 style={{fontFamily:FD,fontSize:22,color:C.accentLight,margin:0}}>Gestão e Metas</h2>
+          <p style={{color:C.muted,fontSize:12,margin:"3px 0 0",fontFamily:FM}}>{rotuloSem(sem)} · contratos, protocolos, concessões e indeferimentos por produto</p>
+        </div>
+        <div><label style={S.lbl}>Semestre</label><select style={{...S.sel,minWidth:180}} value={sem} onChange={e=>setSem(e.target.value)}>{sems.map(s=><option key={s} value={s}>{rotuloSem(s)}</option>)}</select></div>
+      </div>
+      <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:14}}>
+        {abas.map(([k,l])=><button key={k} onClick={()=>setAba(k)} style={S.navBtn(aba===k)}>{l}</button>)}
+      </div>
+
+      {aba==="panorama" && <>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+          <Kpi rotulo="Contratos fechados" valor={tot.contratos} sub={fmtCur(tot.faturamento)} cor={C.accentLight}/>
+          <Kpi rotulo="Protocolos" valor={tot.protocolos} sub={`taxa de protocolo ${fmtPct(tot.taxaProt)}`} cor={C.info}/>
+          <Kpi rotulo="Concessões" valor={tot.concessoes} sub={`adm ${fmtPct(tot.taxaConcAdm)} · judicial ${fmtPct(tot.procJud)}`} cor={C.success}/>
+          <Kpi rotulo="Indeferimentos" valor={tot.indeferidos} sub={`taxa ${fmtPct(tot.taxaIndef)} das decisões`} cor={C.danger}/>
+          <Kpi rotulo="Ticket médio" valor={fmtCur(tot.ticket)} sub="por contrato válido"/>
+        </div>
+        <div style={S.card}>
+          <div style={S.cardTitle}>Por produto</div>
+          <Tabela cols={["Produto","Contratos","Meta","Protocolos","Taxa prot.","Concessões","Conc. adm","Proc. judicial","Indef.","Ticket médio"]}
+            linhas={porProd.map(x=>({cells:[x.p, x.r.contratos, x.meta.metaContratos?`${pct(x.r.contratos,Number(x.meta.metaContratos))}%`:"—", x.r.protocolos, fmtPct(x.r.taxaProt), x.r.concessoes, fmtPct(x.r.taxaConcAdm), fmtPct(x.r.procJud), x.r.indeferidos, fmtCur(x.r.ticket)]}))}/>
+          <div style={{fontSize:10,color:C.muted,marginTop:8,lineHeight:1.6}}>Taxa de protocolo = protocolos ÷ contratos do semestre. Concessão adm e procedência judicial = concedidos ÷ decididos em cada fase. As datas vêm dos campos "Data do protocolo" e "Data da decisão" do cliente, ou do Histórico processual.</div>
+        </div>
+      </>}
+
+      {aba==="mensal" && <>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:12}}>
+          <div><label style={S.lbl}>Mês</label><select style={S.sel} value={mesSel} onChange={e=>setMes(e.target.value)}>{meses.map(m=><option key={m} value={m}>{MESES[Number(m.slice(5))-1]}/{m.slice(0,4)}</option>)}</select></div>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{[["contratos","Contratos"],["protocolos","Protocolos"],["concessoes","Concessões"],["indeferidos","Indeferimentos"]].map(([k,l])=><button key={k} onClick={()=>setSub(k)} style={S.navBtn(sub===k)}>{l}</button>)}</div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:10}}>
+          {porProd.map(x=>{
+            const metaSem = Number(sub==="contratos"?x.meta.metaContratos:sub==="protocolos"?x.meta.metaProtocolos:0)||0;
+            const metaMes = metaSem ? Math.ceil(metaSem/6) : 0;
+            const vMes = x.rm[sub], vSem = x.r[sub];
+            const bateu = metaMes && vMes>=metaMes;
+            return (
+              <div key={x.p} style={{background:C.card,border:`1px solid ${bateu?C.success:C.border}`,borderRadius:10,padding:12}}>
+                <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>{sub} · {MESES[Number(mesSel.slice(5))-1]}</div>
+                <div style={{fontSize:12,fontWeight:700,margin:"2px 0 6px"}}>{x.p}</div>
+                <div style={{fontFamily:FD,fontSize:28,color:bateu?C.success:C.accentLight}}>{vMes}{metaMes?<span style={{fontSize:14,color:C.muted}}> / {metaMes}</span>:null}</div>
+                <div style={{fontSize:11,color:C.muted,lineHeight:1.7,fontFamily:FM}}>
+                  {metaMes?<>meta do mês {metaMes} ({pct(vMes,metaMes)}%)<br/></>:<>sem meta definida<br/></>}
+                  acumulado no semestre <b style={{color:C.text}}>{vSem}</b>{metaSem?` / ${metaSem}`:""}<br/>
+                  {sub==="protocolos"&&<>taxa de protocolo no mês {fmtPct(x.rm.taxaProt)}<br/>contratos no mês {x.rm.contratos}</>}
+                  {sub==="contratos"&&<>faturamento no mês {fmtCur(x.rm.faturamento)}<br/>ticket médio {fmtCur(x.rm.ticket)}</>}
+                  {sub==="concessoes"&&<>conc. adm {fmtPct(x.rm.taxaConcAdm)} · judicial {fmtPct(x.rm.procJud)}</>}
+                  {sub==="indeferidos"&&<>taxa de indeferimento {fmtPct(x.rm.taxaIndef)}</>}
+                </div>
+              </div>
+            );
+          })}
+          {porProd.length===0&&<div style={{color:C.muted,fontSize:12}}>Sem dados neste semestre.</div>}
+        </div>
+      </>}
+
+      {aba==="indeferimentos" && (()=>{
+        const ind = tot.listas.ind;
+        const mot = {}; ind.forEach(m=>{ mot[m.motivo]=(mot[m.motivo]||0)+1; });
+        const motivos = Object.entries(mot).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+        const max = Math.max(1,...motivos.map(m=>m.valor));
+        return <>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+            <Kpi rotulo="Indeferimentos" valor={ind.length} cor={C.danger}/>
+            <Kpi rotulo="Taxa de indeferimento" valor={fmtPct(tot.taxaIndef)} sub={`de ${tot.decididos} decisões`} cor={C.danger}/>
+            <Kpi rotulo="Honorários perdidos" valor={fmtCur(ind.reduce((s,m)=>s+(Number(m.c.valorHonorarios)||0)-recebidoCli(m.c),0))} sub="saldo que não entrou"/>
+          </div>
+          <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+            <div style={{...S.card,flex:"1 1 340px"}}>
+              <div style={S.cardTitle}>Motivos</div>
+              {motivos.length===0&&<div style={{fontSize:12,color:C.muted}}>Nenhum indeferimento no semestre.</div>}
+              {motivos.map(m=>(
+                <div key={m.nome} style={{display:"grid",gridTemplateColumns:"minmax(120px,220px) 1fr 70px",gap:8,alignItems:"center",padding:"5px 0"}}>
+                  <span style={{fontSize:12}}>{m.nome}</span>
+                  <div style={{height:12,width:`${m.valor/max*100}%`,background:C.danger,borderRadius:"0 4px 4px 0"}}/>
+                  <span style={{fontSize:11,fontFamily:FM,textAlign:"right"}}><b>{m.valor}</b> · {pct(m.valor,ind.length)}%</span>
+                </div>
+              ))}
+              {mot["Não informado"]&&<div style={{fontSize:10,color:C.warn,marginTop:6}}>Preencha o "Motivo do indeferimento" na ficha do cliente para este gráfico ficar completo.</div>}
+            </div>
+            <div style={{...S.card,flex:"1 1 340px"}}>
+              <div style={S.cardTitle}>Por produto</div>
+              <Tabela cols={["Produto","Indef.","Decisões","Taxa"]} linhas={porProd.filter(x=>x.r.decididos).map(x=>({cells:[x.p,x.r.indeferidos,x.r.decididos,fmtPct(x.r.taxaIndef)]}))}/>
+            </div>
+          </div>
+          <div style={S.card}>
+            <div style={S.cardTitle}>Clientes indeferidos</div>
+            <Tabela cols={["Cliente","Produto","Fase","Motivo","Decisão"]} onRow={l=>onSelect(l.c)} linhas={ind.map(m=>({c:m.c,cells:[m.c.nome,m.produto,m.via,m.motivo,fmtDate(m.decisao)]}))}/>
+          </div>
+        </>;
+      })()}
+
+      {aba==="equipe" && <div style={S.card}>
+        <div style={S.cardTitle}>Desempenho por responsável</div>
+        <Tabela cols={["Responsável","Contratos","Faturamento","Ticket médio","Protocolos","Concessões"]} linhas={agrupar("resp").map(g=>({cells:[g.k,g.r.contratos,fmtCur(g.r.faturamento),fmtCur(g.r.ticket),resumo(g.l,()=>true).protocolos,resumo(g.l,()=>true).concessoes]}))}/>
+        <div style={{fontSize:10,color:C.muted,marginTop:8}}>Preencha "Responsável / vendedora" na ficha do cliente (aba Dados) para separar o desempenho de cada pessoa.</div>
+      </div>}
+
+      {aba==="prospeccao" && (()=>{
+        const g = agrupar("origem");
+        const ls = leads.filter(l=>semestreDe(diaISO(l.dataCadastro))===sem || !l.dataCadastro);
+        const porOrigLead = {}; ls.forEach(l=>{ const k=l.origem||"Não informada"; const o=porOrigLead[k]||(porOrigLead[k]={n:0,conv:0}); o.n++; if(l.status==="Convertido") o.conv++; });
+        return <>
+          <div style={S.card}>
+            <div style={S.cardTitle}>Contratos por meio de prospecção</div>
+            <Tabela cols={["Meio","Contratos","% dos contratos","Faturamento","Ticket médio"]} linhas={g.map(x=>({cells:[x.k,x.r.contratos,fmtPct(pct(x.r.contratos,tot.contratos)),fmtCur(x.r.faturamento),fmtCur(x.r.ticket)]}))}/>
+          </div>
+          <div style={S.card}>
+            <div style={S.cardTitle}>Leads e conversão</div>
+            <Tabela cols={["Origem","Leads","Convertidos","Conversão"]} linhas={Object.entries(porOrigLead).sort((a,b)=>b[1].n-a[1].n).map(([k,o])=>({cells:[k,o.n,o.conv,fmtPct(pct(o.conv,o.n))]}))}/>
+          </div>
+        </>;
+      })()}
+
+      {aba==="crescimento" && (()=>{
+        const ult = Array.from({length:12},(_,i)=>{ const d=new Date(); d.setDate(1); d.setMonth(d.getMonth()-11+i); return isoLocal(d).slice(0,7); });
+        const dados = ult.map(m=>({ m, r: resumo(ms, d=>d&&d.slice(0,7)===m) }));
+        const maxC = Math.max(1,...dados.map(d=>d.r.contratos)), maxF = Math.max(1,...dados.map(d=>d.r.faturamento));
+        const grafico = (titulo, campo, max, fmt, cor) => (
+          <div style={{...S.card,flex:"1 1 420px"}}>
+            <div style={S.cardTitle}>{titulo}</div>
+            <div style={{display:"flex",alignItems:"flex-end",gap:6,height:160,paddingTop:16}}>
+              {dados.map(d=>(
+                <div key={d.m} title={`${MESES[Number(d.m.slice(5))-1]}/${d.m.slice(0,4)}: ${fmt(d.r[campo])}`} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"flex-end",height:"100%"}}>
+                  <span style={{fontSize:9,color:C.muted,fontFamily:FM,marginBottom:2}}>{d.r[campo]?(campo==="faturamento"?Math.round(d.r[campo]/1000)+"k":d.r[campo]):""}</span>
+                  <div style={{width:"70%",height:`${d.r[campo]/max*100}%`,minHeight:d.r[campo]?2:0,background:cor,borderRadius:"4px 4px 0 0"}}/>
+                  <span style={{fontSize:9,color:C.muted,fontFamily:FM,marginTop:4}}>{MESES[Number(d.m.slice(5))-1]}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+        return <div style={{display:"flex",gap:14,flexWrap:"wrap"}}>
+          {grafico("Contratos fechados por mês","contratos",maxC,v=>String(v),COR_RECEBIDO)}
+          {grafico("Faturamento por mês","faturamento",maxF,fmtCur,COR_ARECEBER)}
+        </div>;
+      })()}
+
+      {aba==="metas" && <MetasSemestre sem={sem} produtos={produtos} porProd={porProd} metas={metas} onSave={onSaveMeta}/>}
+    </div>
+  );
+}
+
+function MetasSemestre({ sem, produtos, porProd, metas, onSave }) {
+  const [edit, setEdit] = useState({});
+  const [salvo, setSalvo] = useState("");
+  const val = (p, k) => edit[p]?.[k] ?? (metas.find(x=>x.semestre===sem&&x.produto===p)?.[k] ?? "");
+  const salvar = async () => {
+    for (const p of Object.keys(edit)) {
+      const atual = metas.find(x=>x.semestre===sem&&x.produto===p);
+      await onSave({ id: atual?.id || uid(), semestre: sem, produto: p, metaContratos: val(p,"metaContratos"), metaProtocolos: val(p,"metaProtocolos") });
+    }
+    setEdit({}); setSalvo("Metas salvas na planilha."); setTimeout(()=>setSalvo(""),3000);
+  };
+  return (
+    <div style={S.card}>
+      <div style={S.cardTitle}>Metas do {rotuloSem(sem)}</div>
+      <div style={{fontSize:11,color:C.muted,marginBottom:10}}>Defina quantos contratos e protocolos espera por produto no semestre. A meta mensal da Análise mensal é a meta do semestre dividida por 6.</div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:600}}>
+          <thead><tr style={{color:C.muted,fontFamily:FM,fontSize:10,textTransform:"uppercase"}}>
+            <th style={{textAlign:"left",padding:6}}>Produto</th><th style={{padding:6}}>Meta contratos</th><th style={{padding:6,textAlign:"right"}}>Realizado</th><th style={{padding:6}}>Meta protocolos</th><th style={{padding:6,textAlign:"right"}}>Realizado</th>
+          </tr></thead>
+          <tbody>{produtos.map(p=>{
+            const r = porProd.find(x=>x.p===p)?.r || { contratos:0, protocolos:0 };
+            const mc = Number(val(p,"metaContratos"))||0, mp = Number(val(p,"metaProtocolos"))||0;
+            const cel = (k) => <input type="number" min={0} style={{...S.inp,padding:"5px 8px",width:90}} value={val(p,k)} onChange={e=>setEdit(x=>({...x,[p]:{...x[p],[k]:e.target.value}}))}/>;
+            return <tr key={p} style={{borderTop:`1px solid ${C.border}`}}>
+              <td style={{padding:6,fontWeight:600}}>{p}</td>
+              <td style={{padding:6,textAlign:"center"}}>{cel("metaContratos")}</td>
+              <td style={{padding:6,textAlign:"right",fontFamily:FM,color:mc&&r.contratos>=mc?C.success:C.text}}>{r.contratos}{mc?` (${pct(r.contratos,mc)}%)`:""}</td>
+              <td style={{padding:6,textAlign:"center"}}>{cel("metaProtocolos")}</td>
+              <td style={{padding:6,textAlign:"right",fontFamily:FM,color:mp&&r.protocolos>=mp?C.success:C.text}}>{r.protocolos}{mp?` (${pct(r.protocolos,mp)}%)`:""}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,marginTop:12}}>
+        {salvo&&<span style={{fontSize:12,color:C.success}}>✓ {salvo}</span>}
+        <button style={S.btn("primary")} disabled={!Object.keys(edit).length} onClick={salvar}>Salvar metas</button>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNewLead, onIr = ()=>{} }) {
   const total = clients.length;
   const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)&&!ehIndeferido(c)).length;
@@ -1488,6 +1783,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
           </div>
           <F label="CEP"><CepInput value={form.cep||""} onChange={v=>setForm({...form,cep:v})} onEnderecoFound={e=>setForm(p=>({...p,endereco:e}))}/></F>
           <F label="Endereço Completo"><input style={S.inp} value={form.endereco||""} onChange={e=>setForm({...form,endereco:e.target.value})}/></F>
+          <GestaoProcesso form={form} setForm={setForm}/>
           <Representante form={form} setForm={setForm}/>
           <F label="Observações"><textarea style={{...S.textarea,minHeight:70}} value={form.observacoes||""} onChange={e=>setForm({...form,observacoes:e.target.value})}/></F>
           <div style={{display:"flex",justifyContent:"flex-end",marginTop:12}}>
@@ -2063,6 +2359,7 @@ function App() {
   const [followUps, setFollowUps] = useState([]);
   const [mensagens, setMensagens] = useState([]);
   const [timeline, setTimeline] = useState([]);
+  const [metas, setMetas] = useState([]);
   const [view, setView] = useState("dashboard");
   const [preset, setPreset] = useState({ v:0, f:{} });
   const irPara = (v, f={}) => { setPreset(p=>({ v:p.v+1, f })); setSelectedClient(null); setView(v); window.scrollTo(0,0); };
@@ -2098,6 +2395,7 @@ function App() {
       setFollowUps(prev => mergeWithLocal(d.followups || [], prev));
       setMensagens(prev => mergeWithLocal(d.mensagens || [], prev));
       if (d.timeline) setTimeline(prev => mergeWithLocal(d.timeline, prev));
+      if (d.metas) setMetas(prev => mergeWithLocal(d.metas, prev));
 
       setSyncStatus("ok");
       setLastSync(new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}));
@@ -2189,6 +2487,7 @@ function App() {
   const saveFollowUp = (f) => persist("Followup", f, setFollowUps);
   const delFollowUp = (id) => remove("Followup", id, setFollowUps);
   const saveMensagem = (m) => persist("Mensagem", m, setMensagens);
+  const saveMeta = (m) => persist("Meta", m, setMetas);
   const saveTimeline = (e) => persist("Timeline", e, setTimeline);
   const delTimeline = (id) => remove("Timeline", id, setTimeline);
 
@@ -2210,7 +2509,7 @@ function App() {
       email:"", profissao:"", nacionalidade:"brasileiro(a)", estadoCivil:"", cep:"", endereco:"",
       beneficio:lead.beneficioInteresse, status:"Novo cliente", valorHonorarios:"",
       parcelamentoTotal:1, parcelamentoPagas:0, parcelamentoValor:"",
-      dataCadastro:hoje(), observacoes:`Convertido de lead em ${hoje()}. ${lead.observacoes||""}`,
+      dataCadastro:hoje(), observacoes:`Convertido de lead em ${hoje()}. ${lead.observacoes||""}`, origem: lead.origem||"",
       numeroBeneficio:"",
     };
     await saveLead({...lead, status:"Convertido"});
@@ -2225,6 +2524,7 @@ function App() {
     { key:"clientes",  label:"Clientes" },
     { key:"agenda",    label:"Agenda" },
     { key:"recebimentos", label:"Recebimentos" },
+    { key:"gestao", label:"Metas" },
   ];
 
   const leadsQ = leads.filter(l=>l.temperatura==="🔥 Quente"&&!["Convertido","Perdido"].includes(l.status)).length;
@@ -2289,6 +2589,8 @@ function App() {
           />
         ) : view==="clientes" ? (
           <ClientesList key={"c"+preset.v} preset={preset.f} clients={clients} tarefas={tarefas} onSelect={c=>setSelectedClient(c)} onNew={()=>setShowNewClient(true)}/>
+        ) : view==="gestao" ? (
+          <Gestao clients={clients} leads={leads} timeline={timeline} metas={metas} onSaveMeta={saveMeta} onSelect={c=>setSelectedClient(c)}/>
         ) : view==="recebimentos" ? (
           <Recebimentos key={"r"+preset.v} preset={preset.f} clients={clients} onSelect={c=>setSelectedClient(c)}/>
         ) : view==="agenda" ? (
