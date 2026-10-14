@@ -250,10 +250,10 @@ async function extrairDados(base64, mediaType, fileName, instrucao = "", nomeCli
 // ─── MENSAGEM IA ──────────────────────────────────────────────────────────────
 const ASSINATURA = "Yalley Vasconcelos, Advogado";
 const MSG_TIPOS = { protocolo:"Processo Protocolado", pericia:"Perícia Agendada", resultado:"Movimentação Processual", aprovado:"Benefício Concedido", recurso:"Recurso Interposto", documento:"📎 Só resumir o documento anexado" };
-async function chamarIA(content, maxTokens) {
+async function chamarIA(content, maxTokens, qualidade) {
   const r = await fetch("/api/claude", {
     method:"POST", headers:{"Content-Type":"application/json", ...authHeaders()},
-    body: JSON.stringify({ max_tokens: maxTokens, messages:[{ role:"user", content }] })
+    body: JSON.stringify({ max_tokens: maxTokens, qualidade, messages:[{ role:"user", content }] })
   });
   if (r.status === 401) { sair(); throw new Error("Sessão expirada"); }
   const d = await r.json().catch(()=>({}));
@@ -1636,7 +1636,8 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
 // ─── IMPORTAR CONTRATO (cria o cadastro a partir do contrato de honorários) ────
 function textoDocx(b64) {
   const zip = new PizZip(atob(b64));
-  const xml = zip.file("word/document.xml")?.asText() || "";
+  const partes = ["word/document.xml", ...Object.keys(zip.files).filter(n=>/^word\/(header|footer)\d*\.xml$/.test(n))];
+  const xml = partes.map(n=>zip.file(n)?.asText()||"").join("\n");
   return xml.replace(/<w:tab\/>/g, "\t").replace(/<\/w:p>/g, "\n").replace(/<[^>]+>/g, "").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/\n{3,}/g,"\n\n").trim();
 }
 const PROMPT_CONTRATO = `Você recebe um CONTRATO DE HONORÁRIOS ADVOCATÍCIOS (direito previdenciário). Extraia os dados do CONTRATANTE (cliente) e as condições financeiras.
@@ -1677,9 +1678,21 @@ function ImportarContrato({ onDados }) {
         const bloco = mt==="application/pdf" ? { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } } : { type:"image", source:{ type:"base64", media_type:mt, data:b64 } };
         content = [bloco, { type:"text", text: PROMPT_CONTRATO }];
       }
-      const raw = await chamarIA(content, 1800);
-      let d; try { d = JSON.parse(raw.replace(/```json|```/g,"").trim()); } catch { const m = raw.match(/\{[\s\S]*\}/); d = m ? JSON.parse(m[0]) : null; }
+      const lerJSON = (raw) => { try { return JSON.parse(raw.replace(/```json|```/g,"").trim()); } catch { const m = raw.match(/\{[\s\S]*\}/); try { return m ? JSON.parse(m[0]) : null; } catch { return null; } } };
+      let d = lerJSON(await chamarIA(content, 2500, "alta"));
       if (!d || !d.nome) throw new Error("Não consegui identificar o contratante. Confira se é o contrato de honorários.");
+      // 2ª leitura: procura de novo só o que ficou vazio
+      const essenciais = ["cpf","rg","dataNascimento","estadoCivil","profissao","endereco","cep","telefone","beneficio","dataContrato","valorHonorarios"];
+      const vazios = essenciais.filter(k => !d[k] || d[k]===0 || d[k]==="0");
+      if (d.representado) ["repNome","repCpf","repRg","repEstadoCivil","repProfissao"].forEach(k=>{ if(!d[k]) vazios.push(k); });
+      if (!Array.isArray(d.parcelas) || !d.parcelas.length) vazios.push("parcelas");
+      if (vazios.length) {
+        const pedido = `Na primeira leitura estes campos ficaram vazios: ${vazios.join(", ")}. Leia o contrato INTEIRO de novo com atenção (qualificação no início, cláusula de honorários/remuneração/pagamento, local e data no fim, assinaturas) e procure especificamente esses campos. Responda APENAS um JSON só com esses campos, no mesmo formato do modelo abaixo; deixe vazio apenas se realmente não existir no texto.\n\n` + PROMPT_CONTRATO;
+        const content2 = content.map(b => b.type==="text" ? { type:"text", text: pedido + (b.text.includes("TEXTO DO CONTRATO:") ? "\n\nTEXTO DO CONTRATO:\n" + b.text.split("TEXTO DO CONTRATO:\n")[1] : "") } : b);
+        const d2 = lerJSON(await chamarIA(content2, 2000, "alta").catch(()=>"{}")) || {};
+        vazios.forEach(k => { const v = d2[k]; if (v!==undefined && v!==null && v!=="" && v!==0 && !(Array.isArray(v)&&!v.length)) d[k] = v; });
+        if (d2.representado && !d.representado) Object.assign(d, d2);
+      }
 
       const parcelas = Array.isArray(d.parcelas) ? d.parcelas.filter(p=>Number(p?.valor)>0 || p?.vencimento) : [];
       const total = Math.max(1, parcelas.length || Number(d.parcelamentoTotal) || 1);
@@ -1703,7 +1716,9 @@ function ImportarContrato({ onDados }) {
       if (d.representado) Object.assign(novo, { representado:"sim", repTipo: ["impubere","pubere","curatela"].includes(d.repTipo)?d.repTipo:"", repParentesco: limpo(d.repParentesco), repNome: limpo(d.repNome).toUpperCase(), repCpf: limpo(d.repCpf), repRg: limpo(d.repRg), repNacionalidade: nac(d.repNacionalidade), repEstadoCivil: ec(d.repEstadoCivil), repProfissao: limpo(d.repProfissao), repEndereco: limpo(d.repEndereco) });
       Object.keys(novo).forEach(k => { if (novo[k]==="" ) delete novo[k]; });
       onDados(novo);
-      setResumo({ nome: novo.nome, beneficio: novo.beneficio, hon, total, vencs: Object.values(datas).filter(x=>x.venc).length, rep: novo.repNome });
+      const rotulos = { cpf:"CPF", rg:"RG", dataNascimento:"nascimento", estadoCivil:"estado civil", profissao:"profissão", endereco:"endereço", cep:"CEP", telefone:"telefone", email:"e-mail", beneficio:"benefício", valorHonorarios:"honorários" };
+      const faltando = Object.keys(rotulos).filter(k => !novo[k]).map(k => rotulos[k]);
+      setResumo({ nome: novo.nome, beneficio: novo.beneficio, hon, total, vencs: Object.values(datas).filter(x=>x.venc).length, rep: novo.repNome, faltando });
       setStatus("ok");
     } catch (e) { setErro(e.message || "Erro ao ler o contrato"); setStatus("error"); }
   };
@@ -1724,7 +1739,8 @@ function ImportarContrato({ onDados }) {
           <b>{resumo.nome}</b>{resumo.beneficio?` · ${resumo.beneficio}`:""}<br/>
           Honorários: <b>{fmtCur(resumo.hon)}</b> em {resumo.total} parcela(s){resumo.vencs?`, ${resumo.vencs} com vencimento`:""}
           {resumo.rep&&<><br/>Representante: <b>{resumo.rep}</b></>}
-          <div style={{color:C.warn,fontSize:11,marginTop:4}}>Confira os campos abaixo antes de clicar em Cadastrar.</div>
+          {resumo.faltando?.length>0 && <div style={{color:C.warn,fontSize:11,marginTop:4}}>Não encontrado no contrato: {resumo.faltando.join(", ")}.</div>}
+          <div style={{color:C.muted,fontSize:11,marginTop:2}}>Confira os campos abaixo antes de clicar em Cadastrar.</div>
         </div>
       )}
     </div>
@@ -1751,6 +1767,8 @@ function NovoCliente({ onSave, onCancel }) {
           <F label="Estado Civil"><select style={S.sel} value={form.estadoCivil} onChange={e=>setForm({...form,estadoCivil:e.target.value})}><option value="">Selecionar</option>{ESTADO_CIVIL.map(n=><option key={n}>{n}</option>)}</select></F>
           <F label="Profissão"><input style={S.inp} value={form.profissao} onChange={e=>setForm({...form,profissao:e.target.value})}/></F>
           <F label="Telefone"><input style={S.inp} value={form.telefone} onChange={e=>setForm({...form,telefone:e.target.value})} placeholder="(96) 99000-0000"/></F>
+          <F label="E-mail"><input style={S.inp} value={form.email||""} onChange={e=>setForm({...form,email:e.target.value})}/></F>
+          <F label="Data do contrato"><input type="date" style={S.inp} value={diaISO(form.dataCadastro)} onChange={e=>setForm({...form,dataCadastro:e.target.value})}/></F>
           <F label="Benefício"><select style={S.sel} value={form.beneficio} onChange={e=>setForm({...form,beneficio:e.target.value})}>{[...new Set([form.beneficio, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
           <F label="Nº Benefício/NB"><input style={S.inp} value={form.numeroBeneficio} onChange={e=>setForm({...form,numeroBeneficio:e.target.value})}/></F>
           <F label="Honorários (R$)"><input style={S.inp} type="number" value={form.valorHonorarios} onChange={e=>setForm({...form,valorHonorarios:e.target.value})}/></F>
