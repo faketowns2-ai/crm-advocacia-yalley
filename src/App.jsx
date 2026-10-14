@@ -1633,6 +1633,104 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
 // ═══════════════════════════════════════════════════════════════════════════
 // FORMULÁRIO NOVO CLIENTE
 // ═══════════════════════════════════════════════════════════════════════════
+// ─── IMPORTAR CONTRATO (cria o cadastro a partir do contrato de honorários) ────
+function textoDocx(b64) {
+  const zip = new PizZip(atob(b64));
+  const xml = zip.file("word/document.xml")?.asText() || "";
+  return xml.replace(/<w:tab\/>/g, "\t").replace(/<\/w:p>/g, "\n").replace(/<[^>]+>/g, "").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/\n{3,}/g,"\n\n").trim();
+}
+const PROMPT_CONTRATO = `Você recebe um CONTRATO DE HONORÁRIOS ADVOCATÍCIOS (direito previdenciário). Extraia os dados do CONTRATANTE (cliente) e as condições financeiras.
+Retorne APENAS JSON válido, sem markdown:
+{"nome":"","cpf":"","rg":"","dataNascimento":"AAAA-MM-DD","nacionalidade":"","estadoCivil":"","profissao":"","endereco":"","cep":"","telefone":"","email":"",
+"beneficio":"","numeroBeneficio":"","dataContrato":"AAAA-MM-DD",
+"valorHonorarios":0,"parcelamentoTotal":1,"parcelas":[{"valor":0,"vencimento":"AAAA-MM-DD"}],"percentualRetroativos":"","condicoes":"",
+"representado":false,"repTipo":"","repParentesco":"","repNome":"","repCpf":"","repRg":"","repNacionalidade":"","repEstadoCivil":"","repProfissao":"","repEndereco":""}
+Regras:
+1. O CONTRATADO é o advogado (Yalley da Silva Vasconcelos): nunca use os dados dele como cliente.
+2. Datas em AAAA-MM-DD. Valores em número (ex.: 8100.50), sem "R$". Campo não encontrado fica vazio ("" ou 0).
+3. "beneficio": o benefício objeto do contrato, escrito de forma curta (ex.: "Salário-Maternidade", "Benefício de Prestação Continuada (BPC/LOAS)", "Auxílio-Acidente", "Pensão por Morte", "Aposentadoria por Idade").
+4. "parcelas": uma entrada por parcela com valor e vencimento quando o contrato informar. Se disser apenas "3x de R$ 1.000,00", repita 3 parcelas de 1000 sem vencimento. Se for pagamento único, uma parcela.
+5. "percentualRetroativos": ex. "30%" quando houver percentual sobre atrasados. "condicoes": resumo curto (1 linha) de outras condições de pagamento relevantes.
+6. Se o contratante for menor ou incapaz representado/assistido: "representado": true, "repTipo": "impubere" (menor de 16), "pubere" (16 ou 17, assistido) ou "curatela"; e preencha os dados do representante (rep...). Os campos sem prefixo continuam sendo do menor/incapaz.
+7. "estadoCivil" no formato: Solteiro(a), Casado(a), Divorciado(a), Viúvo(a), União estável ou Separado(a). "nacionalidade" ex.: brasileiro(a).`;
+
+function ImportarContrato({ onDados }) {
+  const [status, setStatus] = useState("idle");
+  const [erro, setErro] = useState("");
+  const [nomeArq, setNomeArq] = useState("");
+  const [resumo, setResumo] = useState(null);
+  const ref = useRef();
+
+  const processar = async (f) => {
+    if (!f) return;
+    if (f.size > 3*1024*1024) { setErro("Arquivo muito grande. Máximo 3MB."); setStatus("error"); return; }
+    setStatus("loading"); setErro(""); setNomeArq(f.name); setResumo(null);
+    try {
+      const b64 = await new Promise((ok,ko)=>{ const fr=new FileReader(); fr.onload=e=>ok(String(e.target.result).split(",")[1]); fr.onerror=()=>ko(new Error("Erro ao ler o arquivo")); fr.readAsDataURL(f); });
+      let content;
+      if (/\.docx$/i.test(f.name)) {
+        const txt = textoDocx(b64);
+        if (txt.length < 50) throw new Error("Não encontrei texto no .docx.");
+        content = [{ type:"text", text: PROMPT_CONTRATO + "\n\nTEXTO DO CONTRATO:\n" + txt.slice(0, 60000) }];
+      } else {
+        const mt = normalizarMediaType(f.type, f.name);
+        const bloco = mt==="application/pdf" ? { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } } : { type:"image", source:{ type:"base64", media_type:mt, data:b64 } };
+        content = [bloco, { type:"text", text: PROMPT_CONTRATO }];
+      }
+      const raw = await chamarIA(content, 1800);
+      let d; try { d = JSON.parse(raw.replace(/```json|```/g,"").trim()); } catch { const m = raw.match(/\{[\s\S]*\}/); d = m ? JSON.parse(m[0]) : null; }
+      if (!d || !d.nome) throw new Error("Não consegui identificar o contratante. Confira se é o contrato de honorários.");
+
+      const parcelas = Array.isArray(d.parcelas) ? d.parcelas.filter(p=>Number(p?.valor)>0 || p?.vencimento) : [];
+      const total = Math.max(1, parcelas.length || Number(d.parcelamentoTotal) || 1);
+      const datas = {};
+      for (let i=0;i<total;i++) { const p = parcelas[i] || {}; datas[i] = { venc: diaISO(p.vencimento)||"", valor: Number(p.valor)>0 ? String(p.valor) : "", pago:false, dataPgto:"", forma:"", obs:"" }; }
+      const hon = Number(d.valorHonorarios) || parcelas.reduce((s,p)=>s+(Number(p.valor)||0),0);
+      const obs = [d.percentualRetroativos?`Retroativos: ${d.percentualRetroativos}`:"", d.condicoes||"", `Importado do contrato "${f.name}" em ${fmtDate(hoje())}`].filter(Boolean).join(". ");
+      const limpo = (v) => (v===null||v===undefined) ? "" : String(v).trim();
+      const nac = (v) => { const t=normTxt(v); if(!t) return ""; if(/natur/.test(t)) return "brasileira naturalizada"; if(/brasil/.test(t)) return "brasileiro(a)"; if(/estrang/.test(t)) return "estrangeiro(a)"; return limpo(v); };
+      const ec = (v) => { const t=normTxt(v); if(!t) return ""; if(/uniao|estavel|convivente/.test(t)) return "União estável"; if(/separ/.test(t)) return "Separado(a)"; if(/divor/.test(t)) return "Divorciado(a)"; if(/viuv/.test(t)) return "Viúvo(a)"; if(/casad/.test(t)) return "Casado(a)"; if(/solteir/.test(t)) return "Solteiro(a)"; return ""; };
+      const novo = {
+        nome: limpo(d.nome).toUpperCase(), cpf: limpo(d.cpf), rg: limpo(d.rg), dataNascimento: diaISO(d.dataNascimento),
+        nacionalidade: nac(d.nacionalidade) || "brasileiro(a)", estadoCivil: ec(d.estadoCivil), profissao: limpo(d.profissao),
+        endereco: limpo(d.endereco), cep: limpo(d.cep), telefone: limpo(d.telefone), email: limpo(d.email),
+        beneficio: limpo(d.beneficio), numeroBeneficio: limpo(d.numeroBeneficio),
+        dataCadastro: diaISO(d.dataContrato) || hoje(),
+        valorHonorarios: hon ? String(hon) : "", parcelamentoTotal: total, parcelamentoPagas: 0,
+        parcelamentoValor: parcelas[0]?.valor ? String(parcelas[0].valor) : (hon ? (hon/total).toFixed(2) : ""),
+        parcelamentoDatas: JSON.stringify(datas), observacoes: obs,
+      };
+      if (d.representado) Object.assign(novo, { representado:"sim", repTipo: ["impubere","pubere","curatela"].includes(d.repTipo)?d.repTipo:"", repParentesco: limpo(d.repParentesco), repNome: limpo(d.repNome).toUpperCase(), repCpf: limpo(d.repCpf), repRg: limpo(d.repRg), repNacionalidade: nac(d.repNacionalidade), repEstadoCivil: ec(d.repEstadoCivil), repProfissao: limpo(d.repProfissao), repEndereco: limpo(d.repEndereco) });
+      Object.keys(novo).forEach(k => { if (novo[k]==="" ) delete novo[k]; });
+      onDados(novo);
+      setResumo({ nome: novo.nome, beneficio: novo.beneficio, hon, total, vencs: Object.values(datas).filter(x=>x.venc).length, rep: novo.repNome });
+      setStatus("ok");
+    } catch (e) { setErro(e.message || "Erro ao ler o contrato"); setStatus("error"); }
+  };
+
+  return (
+    <div style={{marginBottom:14}}>
+      <div onClick={()=>status!=="loading"&&ref.current.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();processar(e.dataTransfer.files[0]);}}
+        style={{border:`2px dashed ${status==="ok"?C.success:status==="error"?C.danger:C.accent}`,borderRadius:10,padding:"16px",textAlign:"center",cursor:status==="loading"?"wait":"pointer",background:status==="ok"?C.success+"0d":C.accent+"0d"}}>
+        <div style={{fontSize:22,marginBottom:4}}>{status==="loading"?"⏳":status==="ok"?"✅":"📑"}</div>
+        <div style={{fontSize:13,color:status==="ok"?C.success:C.accentLight,fontWeight:600}}>{status==="loading"?"Lendo o contrato...":status==="ok"?"Cadastro preenchido pelo contrato":"Criar cadastro a partir do contrato"}</div>
+        <div style={{fontSize:10,color:C.muted,fontFamily:FM}}>{status==="idle"?"Envie o contrato de honorários (.docx, PDF ou foto) · a IA preenche qualificação e financeiro":nomeArq}</div>
+        <input ref={ref} type="file" accept=".docx,.pdf,image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files[0]; e.target.value=""; processar(f);}}/>
+      </div>
+      {status==="loading"&&<Spin text="A IA está lendo o contrato..."/>}
+      {status==="error"&&<div style={{marginTop:8,color:C.danger,fontSize:12,fontFamily:FM}}>⚠ {erro}</div>}
+      {status==="ok"&&resumo&&(
+        <div style={{marginTop:8,background:C.surface,borderRadius:8,padding:10,fontSize:12,lineHeight:1.7}}>
+          <b>{resumo.nome}</b>{resumo.beneficio?` · ${resumo.beneficio}`:""}<br/>
+          Honorários: <b>{fmtCur(resumo.hon)}</b> em {resumo.total} parcela(s){resumo.vencs?`, ${resumo.vencs} com vencimento`:""}
+          {resumo.rep&&<><br/>Representante: <b>{resumo.rep}</b></>}
+          <div style={{color:C.warn,fontSize:11,marginTop:4}}>Confira os campos abaixo antes de clicar em Cadastrar.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NovoCliente({ onSave, onCancel }) {
   const [form, setForm] = useState({ nome:"",cpf:"",rg:"",dataNascimento:"",telefone:"",email:"",profissao:"",nacionalidade:"brasileiro(a)",estadoCivil:"",cep:"",endereco:"",beneficio:BENEFICIOS[0],status:"Novo cliente",valorHonorarios:"",parcelamentoTotal:1,parcelamentoPagas:0,parcelamentoValor:"",dataCadastro:hoje(),observacoes:"",numeroBeneficio:"" });
   const save = () => { if(!form.nome||!form.cpf)return alert("Nome e CPF obrigatórios."); onSave({...form,id:uid()}); };
@@ -1640,7 +1738,10 @@ function NovoCliente({ onSave, onCancel }) {
     <div style={S.modal}>
       <div style={S.modalBox}>
         <h3 style={{fontFamily:FD,color:C.accentLight,marginTop:0,marginBottom:16}}>Novo Cliente</h3>
-        <div style={{marginBottom:14}}><DocUpload atual={form} onExtracted={d=>setForm(p=>({...p,...d}))}/></div>
+        <ImportarContrato onDados={d=>setForm(p=>({...p,...d}))}/>
+        <details style={{marginBottom:14}}><summary style={{cursor:"pointer",fontSize:12,color:C.muted,marginBottom:8}}>Ou enviar RG, CNH ou comprovante de residência</summary>
+          <DocUpload atual={form} onExtracted={d=>setForm(p=>({...p,...d}))}/>
+        </details>
         <div style={S.grid2}>
           <F label="Nome *"><input style={S.inp} value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})}/></F>
           <F label="CPF *"><input style={S.inp} value={form.cpf} onChange={e=>setForm({...form,cpf:e.target.value})} placeholder="000.000.000-00"/></F>
@@ -1650,7 +1751,7 @@ function NovoCliente({ onSave, onCancel }) {
           <F label="Estado Civil"><select style={S.sel} value={form.estadoCivil} onChange={e=>setForm({...form,estadoCivil:e.target.value})}><option value="">Selecionar</option>{ESTADO_CIVIL.map(n=><option key={n}>{n}</option>)}</select></F>
           <F label="Profissão"><input style={S.inp} value={form.profissao} onChange={e=>setForm({...form,profissao:e.target.value})}/></F>
           <F label="Telefone"><input style={S.inp} value={form.telefone} onChange={e=>setForm({...form,telefone:e.target.value})} placeholder="(96) 99000-0000"/></F>
-          <F label="Benefício"><select style={S.sel} value={form.beneficio} onChange={e=>setForm({...form,beneficio:e.target.value})}>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></F>
+          <F label="Benefício"><select style={S.sel} value={form.beneficio} onChange={e=>setForm({...form,beneficio:e.target.value})}>{[...new Set([form.beneficio, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
           <F label="Nº Benefício/NB"><input style={S.inp} value={form.numeroBeneficio} onChange={e=>setForm({...form,numeroBeneficio:e.target.value})}/></F>
           <F label="Honorários (R$)"><input style={S.inp} type="number" value={form.valorHonorarios} onChange={e=>setForm({...form,valorHonorarios:e.target.value})}/></F>
           <F label="Parcelas"><input style={S.inp} type="number" min={1} value={form.parcelamentoTotal} onChange={e=>setForm({...form,parcelamentoTotal:Number(e.target.value)})}/></F>
