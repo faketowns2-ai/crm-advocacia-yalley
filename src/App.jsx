@@ -919,7 +919,7 @@ function Parcelas({ cliente, onChange }) {
 const COR_RECEBIDO = "#a8862f";   // validado (contraste e daltonismo) contra o fundo escuro
 const COR_ARECEBER = "#3f7ab5";
 function Faturamento({ clients, onIr }) {
-  const [per, setPer] = useState("ano");
+  const [per, setPer] = useState("mes");
   const [dIni, setDIni] = useState("");
   const [dFim, setDFim] = useState("");
   const [ben, setBen] = useState("");
