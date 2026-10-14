@@ -1223,6 +1223,22 @@ function Tabela({ cols, linhas, onRow }) {
   );
 }
 
+// Metas: chave do mês com prefixo "M" (o Google Planilhas transforma "2026-10" em data)
+const chaveMes = (m) => "M" + m;
+function semestreLegado(v) {
+  const t = String(v||"");
+  let m = t.match(/^S?(\d{4})-([12])$/); if (m) return `${m[1]}-${m[2]}`;
+  m = t.match(/^(\d{4})-(\d{2})-\d{2}/); if (m) return `${m[1]}-${Number(m[2])<=1?1:2}`; // "2026-2" virou 01/02/2026
+  return "";
+}
+function metaDoMes(metas, produto, mes) { return metas.find(x => String(x.mes)===chaveMes(mes) && x.produto===produto) || null; }
+function metaDoSemestre(metas, produto, sem, campo) {
+  const soma = mesesDoSem(sem).reduce((t,m)=>t+(Number(metaDoMes(metas,produto,m)?.[campo])||0),0);
+  if (soma) return soma;
+  const leg = metas.filter(x => !x.mes && x.produto===produto && semestreLegado(x.semestre)===sem).pop();
+  return Number(leg?.[campo])||0;
+}
+
 function Gestao({ clients, leads, timeline, metas, onSaveMeta, onSelect }) {
   const [aba, setAba] = useState("panorama");
   const ms = clients.map(c=>metricas(c, timeline));
@@ -1237,7 +1253,7 @@ function Gestao({ clients, leads, timeline, metas, onSaveMeta, onSelect }) {
   const noSem = (d) => d && semestreDe(d)===sem;
   const noMes = (d) => d && d.slice(0,7)===mesSel;
   const produtos = [...new Set(ms.map(m=>m.produto))].sort();
-  const metaDe = (p) => metas.find(x=>x.semestre===sem && x.produto===p) || {};
+  const metaDe = (p) => ({ metaContratos: metaDoSemestre(metas,p,sem,"metaContratos"), metaProtocolos: metaDoSemestre(metas,p,sem,"metaProtocolos") });
 
   const resumo = (lista, filtroData) => {
     const contr = lista.filter(m=>filtroData(m.contrato));
@@ -1259,7 +1275,7 @@ function Gestao({ clients, leads, timeline, metas, onSaveMeta, onSelect }) {
     };
   };
   const tot = resumo(ms, noSem);
-  const porProd = produtos.map(p => ({ p, r: resumo(ms.filter(m=>m.produto===p), noSem), rm: resumo(ms.filter(m=>m.produto===p), noMes), meta: metaDe(p) }))
+  const porProd = produtos.map(p => ({ p, r: resumo(ms.filter(m=>m.produto===p), noSem), rm: resumo(ms.filter(m=>m.produto===p), noMes), meta: metaDe(p), metaM: metaDoMes(metas,p,mesSel) || {} }))
     .filter(x => x.r.contratos||x.r.protocolos||x.r.decididos||x.meta.metaContratos||x.meta.metaProtocolos)
     .sort((a,b)=>b.r.contratos-a.r.contratos);
   const agrupar = (campo) => { const m={}; ms.filter(x=>noSem(x.contrato)).forEach(x=>{ const k=x[campo]; (m[k]=m[k]||[]).push(x); }); return Object.entries(m).map(([k,l])=>({k,l,r:resumo(l,noSem)})).sort((a,b)=>b.r.contratos-a.r.contratos); };
@@ -1302,8 +1318,9 @@ function Gestao({ clients, leads, timeline, metas, onSaveMeta, onSelect }) {
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:10}}>
           {porProd.map(x=>{
-            const metaSem = Number(sub==="contratos"?x.meta.metaContratos:sub==="protocolos"?x.meta.metaProtocolos:0)||0;
-            const metaMes = metaSem ? Math.ceil(metaSem/6) : 0;
+            const campo = sub==="contratos"?"metaContratos":sub==="protocolos"?"metaProtocolos":"";
+            const metaSem = campo ? Number(x.meta[campo])||0 : 0;
+            const metaMes = campo ? (Number(x.metaM[campo]) || (metaSem && !mesesDoSem(sem).some(m=>metaDoMes(metas,x.p,m)) ? Math.ceil(metaSem/6) : 0)) : 0;
             const vMes = x.rm[sub], vSem = x.r[sub];
             const bateu = metaMes && vMes>=metaMes;
             return (
@@ -1408,48 +1425,81 @@ function Gestao({ clients, leads, timeline, metas, onSaveMeta, onSelect }) {
         </div>;
       })()}
 
-      {aba==="metas" && <MetasSemestre sem={sem} produtos={produtos} porProd={porProd} metas={metas} onSave={onSaveMeta}/>}
+      {aba==="metas" && <MetasMensais sem={sem} meses={meses} mesInicial={mesSel} produtos={produtos} ms={ms} metas={metas} onSave={onSaveMeta}/>}
     </div>
   );
 }
 
-function MetasSemestre({ sem, produtos, porProd, metas, onSave }) {
+function MetasMensais({ sem, meses, mesInicial, produtos, ms, metas, onSave }) {
+  const [mes, setMes] = useState(mesInicial);
   const [edit, setEdit] = useState({});
-  const [salvo, setSalvo] = useState("");
-  const val = (p, k) => edit[p]?.[k] ?? (metas.find(x=>x.semestre===sem&&x.produto===p)?.[k] ?? "");
-  const salvar = async () => {
-    for (const p of Object.keys(edit)) {
-      const atual = metas.find(x=>x.semestre===sem&&x.produto===p);
-      await onSave({ id: atual?.id || uid(), semestre: sem, produto: p, metaContratos: val(p,"metaContratos"), metaProtocolos: val(p,"metaProtocolos") });
-    }
-    setEdit({}); setSalvo("Metas salvas na planilha."); setTimeout(()=>setSalvo(""),3000);
+  const [msg, setMsg] = useState(null);
+  const [salvando, setSalvando] = useState(false);
+  const atual = (p) => metaDoMes(metas, p, mes);
+  const val = (p, k) => edit[p]?.[k] ?? (atual(p)?.[k] ?? "");
+  const realizado = (p) => {
+    const l = ms.filter(m=>m.produto===p);
+    return { contratos: l.filter(m=>m.contrato&&m.contrato.slice(0,7)===mes).length, protocolos: l.filter(m=>m.protocolo&&m.protocolo.slice(0,7)===mes).length };
   };
+  const trocarMes = (m) => { if (Object.keys(edit).length && !window.confirm("Há metas não salvas neste mês. Descartar?")) return; setEdit({}); setMes(m); };
+  const salvar = async () => {
+    setSalvando(true);
+    try {
+      for (const p of Object.keys(edit)) {
+        const a = atual(p);
+        await onSave({ id: a?.id || uid(), mes: chaveMes(mes), semestre: "S" + sem, produto: p, metaContratos: val(p,"metaContratos"), metaProtocolos: val(p,"metaProtocolos") });
+      }
+      setEdit({}); setMsg({ok:true, t:"Metas salvas na planilha."});
+    } catch (e) { setMsg({ok:false, t:"Não foi possível salvar: " + (e.message||"erro")}); }
+    setSalvando(false); setTimeout(()=>setMsg(null), 4000);
+  };
+  const copiarAnterior = () => {
+    const d = new Date(Number(mes.slice(0,4)), Number(mes.slice(5))-2, 1); const ant = isoLocal(d).slice(0,7);
+    const novo = {}; produtos.forEach(p => { const m = metaDoMes(metas, p, ant); if (m) novo[p] = { metaContratos: m.metaContratos, metaProtocolos: m.metaProtocolos }; });
+    if (!Object.keys(novo).length) { setMsg({ok:false, t:"O mês anterior não tem metas."}); setTimeout(()=>setMsg(null),3000); return; }
+    setEdit(novo);
+  };
+  const totMeta = (k) => produtos.reduce((t,p)=>t+(Number(val(p,k))||0),0);
+  const totReal = (k) => produtos.reduce((t,p)=>t+realizado(p)[k],0);
   return (
     <div style={S.card}>
-      <div style={S.cardTitle}>Metas do {rotuloSem(sem)}</div>
-      <div style={{fontSize:11,color:C.muted,marginBottom:10}}>Defina quantos contratos e protocolos espera por produto no semestre. A meta mensal da Análise mensal é a meta do semestre dividida por 6.</div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:10,marginBottom:10}}>
+        <div>
+          <div style={S.cardTitle}>Metas mensais</div>
+          <div style={{fontSize:11,color:C.muted}}>Defina por produto quantos contratos e protocolos espera em cada mês. A meta do semestre é a soma dos meses.</div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"flex-end"}}>
+          <div><label style={S.lbl}>Mês</label><select style={S.sel} value={mes} onChange={e=>trocarMes(e.target.value)}>{meses.map(m=><option key={m} value={m}>{MESES[Number(m.slice(5))-1]}/{m.slice(0,4)}</option>)}</select></div>
+          <button style={S.btn("ghost")} onClick={copiarAnterior}>Copiar do mês anterior</button>
+        </div>
+      </div>
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:600}}>
           <thead><tr style={{color:C.muted,fontFamily:FM,fontSize:10,textTransform:"uppercase"}}>
             <th style={{textAlign:"left",padding:6}}>Produto</th><th style={{padding:6}}>Meta contratos</th><th style={{padding:6,textAlign:"right"}}>Realizado</th><th style={{padding:6}}>Meta protocolos</th><th style={{padding:6,textAlign:"right"}}>Realizado</th>
           </tr></thead>
-          <tbody>{produtos.map(p=>{
-            const r = porProd.find(x=>x.p===p)?.r || { contratos:0, protocolos:0 };
-            const mc = Number(val(p,"metaContratos"))||0, mp = Number(val(p,"metaProtocolos"))||0;
-            const cel = (k) => <input type="number" min={0} style={{...S.inp,padding:"5px 8px",width:90}} value={val(p,k)} onChange={e=>setEdit(x=>({...x,[p]:{...x[p],[k]:e.target.value}}))}/>;
-            return <tr key={p} style={{borderTop:`1px solid ${C.border}`}}>
-              <td style={{padding:6,fontWeight:600}}>{p}</td>
-              <td style={{padding:6,textAlign:"center"}}>{cel("metaContratos")}</td>
-              <td style={{padding:6,textAlign:"right",fontFamily:FM,color:mc&&r.contratos>=mc?C.success:C.text}}>{r.contratos}{mc?` (${pct(r.contratos,mc)}%)`:""}</td>
-              <td style={{padding:6,textAlign:"center"}}>{cel("metaProtocolos")}</td>
-              <td style={{padding:6,textAlign:"right",fontFamily:FM,color:mp&&r.protocolos>=mp?C.success:C.text}}>{r.protocolos}{mp?` (${pct(r.protocolos,mp)}%)`:""}</td>
-            </tr>;
-          })}</tbody>
+          <tbody>
+            {produtos.map(p=>{
+              const r = realizado(p); const mc = Number(val(p,"metaContratos"))||0, mp = Number(val(p,"metaProtocolos"))||0;
+              const cel = (k) => <input type="number" min={0} style={{...S.inp,padding:"5px 8px",width:90,borderColor:edit[p]?.[k]!==undefined?C.accent:undefined}} value={val(p,k)} onChange={e=>setEdit(x=>({...x,[p]:{...x[p],[k]:e.target.value}}))}/>;
+              return <tr key={p} style={{borderTop:`1px solid ${C.border}`}}>
+                <td style={{padding:6,fontWeight:600}}>{p}</td>
+                <td style={{padding:6,textAlign:"center"}}>{cel("metaContratos")}</td>
+                <td style={{padding:6,textAlign:"right",fontFamily:FM,color:mc&&r.contratos>=mc?C.success:C.text}}>{r.contratos}{mc?` (${pct(r.contratos,mc)}%)`:""}</td>
+                <td style={{padding:6,textAlign:"center"}}>{cel("metaProtocolos")}</td>
+                <td style={{padding:6,textAlign:"right",fontFamily:FM,color:mp&&r.protocolos>=mp?C.success:C.text}}>{r.protocolos}{mp?` (${pct(r.protocolos,mp)}%)`:""}</td>
+              </tr>;
+            })}
+            <tr style={{borderTop:`2px solid ${C.accent}`,fontWeight:700}}>
+              <td style={{padding:8}}>Total do mês</td><td style={{padding:8,textAlign:"center",fontFamily:FM}}>{totMeta("metaContratos")||"—"}</td><td style={{padding:8,textAlign:"right",fontFamily:FM}}>{totReal("contratos")}</td><td style={{padding:8,textAlign:"center",fontFamily:FM}}>{totMeta("metaProtocolos")||"—"}</td><td style={{padding:8,textAlign:"right",fontFamily:FM}}>{totReal("protocolos")}</td>
+            </tr>
+          </tbody>
         </table>
       </div>
       <div style={{display:"flex",justifyContent:"flex-end",alignItems:"center",gap:10,marginTop:12}}>
-        {salvo&&<span style={{fontSize:12,color:C.success}}>✓ {salvo}</span>}
-        <button style={S.btn("primary")} disabled={!Object.keys(edit).length} onClick={salvar}>Salvar metas</button>
+        {msg&&<span style={{fontSize:12,color:msg.ok?C.success:C.danger}}>{msg.ok?"✓ ":"⚠ "}{msg.t}</span>}
+        {Object.keys(edit).length>0&&<span style={{fontSize:11,color:C.warn}}>Alterações não salvas</span>}
+        <button style={S.btn("primary")} disabled={!Object.keys(edit).length||salvando} onClick={salvar}>{salvando?"Salvando...":"Salvar metas do mês"}</button>
       </div>
     </div>
   );
