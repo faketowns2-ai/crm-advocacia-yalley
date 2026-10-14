@@ -24,21 +24,22 @@ function paraOpenAI(content) {
   });
 }
 
-async function viaAnthropic(key, maxTokens, messages) {
+async function viaAnthropic(key, maxTokens, messages, alto) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5", max_tokens: maxTokens, messages }),
+    body: JSON.stringify({ model: (alto && process.env.ANTHROPIC_MODEL_ALTO) || process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5", max_tokens: maxTokens, messages }),
   });
   return { status: r.status, data: await r.json() };
 }
 
-async function viaOpenAI(key, maxTokens, messages) {
+async function viaOpenAI(key, maxTokens, messages, alto) {
   const r = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      model: alto ? (process.env.OPENAI_MODEL_ALTO || "gpt-4o") : (process.env.OPENAI_MODEL || "gpt-4o-mini"),
+      temperature: 0,
       max_tokens: maxTokens,
       messages: messages.map((m) => ({ role: m.role, content: paraOpenAI(m.content) })),
     }),
@@ -73,13 +74,14 @@ export default async function handler(req, res) {
   } catch {
     return erro(res, 400, "Pedido inválido");
   }
-  const maxTokens = Math.min(Number(body.max_tokens) || 1000, 2000);
+  const maxTokens = Math.min(Number(body.max_tokens) || 1000, 3000);
+  const alto = body.qualidade === "alta";
   const messages = body.messages || [];
 
   try {
     const { status, data } = anthropicKey
-      ? await viaAnthropic(anthropicKey, maxTokens, messages)
-      : await viaOpenAI(openaiKey, maxTokens, messages);
+      ? await viaAnthropic(anthropicKey, maxTokens, messages, alto)
+      : await viaOpenAI(openaiKey, maxTokens, messages, alto);
     return res.status(status).json(data);
   } catch (e) {
     return erro(res, 502, "Falha ao contatar o serviço de IA: " + e.message);
