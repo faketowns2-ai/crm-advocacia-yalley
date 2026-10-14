@@ -12,3 +12,6 @@ body {
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: #1a1a2e; }
 ::-webkit-scrollbar-thumb { background: #b8860b; border-radius: 3px; }
+
+.card-click { transition: border-color .15s, transform .15s; }
+.card-click:hover { border-color: #c9a84c !important; transform: translateY(-2px); }
