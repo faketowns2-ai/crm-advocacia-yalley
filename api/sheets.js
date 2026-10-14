@@ -2,7 +2,7 @@ import { tokenValido } from "./_lib/auth.js";
 
 // Intermediário entre o CRM e a planilha. A chave SHEETS_KEY fica só no servidor.
 const URL_PADRAO = "https://script.google.com/macros/s/AKfycby3VGOv4dSFIayqIFzcEYm-2f52KFsV-KYKsyIZHu8eibgXnZLomdhqy4_wwRNbOKEFDQ/exec";
-const ACOES = /^(getAll|upsert(Cliente|Lead|Tarefa|Followup|Mensagem|Timeline)|delete(Cliente|Lead|Tarefa|Followup|Timeline))$/;
+const ACOES = /^(getAll|upsert(Cliente|Lead|Tarefa|Followup|Mensagem|Timeline|Meta)|delete(Cliente|Lead|Tarefa|Followup|Timeline|Meta))$/;
 
 export default async function handler(req, res) {
   if (!tokenValido(req)) return res.status(401).json({ ok: false, error: "Sessão expirada. Entre novamente." });
