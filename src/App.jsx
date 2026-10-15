@@ -2318,10 +2318,155 @@ function NovoLead({ onSave, onCancel }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// CALENDÁRIO MENSAL DE TAREFAS
+// ═══════════════════════════════════════════════════════════════════════════
+const MESES_CAL = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+const DIAS_SEM = ["Dom","Seg","Ter","Qua","Qui","Sex","Sáb"];
+
+function CalendarioMes({ items, clients, onToggle, onDelTarefa, onSaveTarefa }) {
+  const hj = hoje();
+  const [ref, setRef] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const [diaSel, setDiaSel] = useState(hj);
+  const [mostrarConc, setMostrarConc] = useState(false);
+  const [nova, setNova] = useState({ descricao: "", clienteId: "" });
+  const [larg, setLarg] = useState(typeof window !== "undefined" ? window.innerWidth : 1200);
+  useEffect(() => { const f = () => setLarg(window.innerWidth); window.addEventListener("resize", f); return () => window.removeEventListener("resize", f); }, []);
+  const compacto = larg < 720;
+
+  const feito = i => !!(i.concluida || i.concluido);
+  const porDia = {};
+  const semData = [];
+  items.forEach(i => {
+    if (!mostrarConc && feito(i)) return;
+    const k = diaISO(i.prazo);
+    if (!k) { if (!feito(i)) semData.push(i); return; }
+    (porDia[k] = porDia[k] || []).push(i);
+  });
+
+  const cor = i => feito(i) ? C.muted : diaISO(i.prazo) < hj ? C.danger : diaISO(i.prazo) === hj ? C.accent : i.tipo === "followup" ? C.purple : C.info;
+
+  const primeiro = new Date(ref.y, ref.m, 1);
+  const inicio = new Date(primeiro); inicio.setDate(1 - primeiro.getDay());
+  const celulas = Array.from({ length: 42 }, (_, n) => { const d = new Date(inicio); d.setDate(inicio.getDate() + n); return d; });
+  const ultimaLinhaVazia = celulas.slice(35).every(d => d.getMonth() !== ref.m);
+  const dias = ultimaLinhaVazia ? celulas.slice(0, 35) : celulas;
+
+  const mudaMes = delta => setRef(r => { const d = new Date(r.y, r.m + delta, 1); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const irHoje = () => { const d = new Date(); setRef({ y: d.getFullYear(), m: d.getMonth() }); setDiaSel(hj); };
+
+  const doMes = Object.entries(porDia).filter(([k]) => k.startsWith(`${ref.y}-${String(ref.m + 1).padStart(2, "0")}`)).flatMap(([, v]) => v);
+  const resumo = { total: doMes.filter(i => !feito(i)).length, venc: doMes.filter(i => !feito(i) && diaISO(i.prazo) < hj).length };
+
+  const itensDia = (porDia[diaSel] || []).slice().sort((a, b) => Number(feito(a)) - Number(feito(b)));
+  const clientesOrd = clients.slice().sort((a, b) => String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR"));
+  const addTarefa = () => {
+    if (!nova.descricao.trim() || !nova.clienteId) return;
+    onSaveTarefa({ id: uid(), clienteId: nova.clienteId, descricao: nova.descricao.trim(), prazo: diaSel, concluida: false });
+    setNova({ descricao: "", clienteId: nova.clienteId });
+  };
+
+  const navBtn = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, color: C.text, cursor: "pointer", padding: "6px 12px", fontSize: 14, fontFamily: FB };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button style={navBtn} onClick={() => mudaMes(-1)} title="Mês anterior">‹</button>
+          <div style={{ fontFamily: FD, fontSize: 18, color: C.accentLight, minWidth: 170, textAlign: "center" }}>{MESES_CAL[ref.m]} {ref.y}</div>
+          <button style={navBtn} onClick={() => mudaMes(1)} title="Próximo mês">›</button>
+          <button style={{ ...S.btn("ghost"), padding: "6px 12px" }} onClick={irHoje}>Hoje</button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontFamily: FM, fontSize: 11, color: C.muted }}>{resumo.total} pendente(s) no mês{resumo.venc > 0 && <span style={{ color: C.danger }}> · {resumo.venc} vencida(s)</span>}</span>
+          <label style={{ fontSize: 11, color: C.muted, display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+            <input type="checkbox" checked={mostrarConc} onChange={e => setMostrarConc(e.target.checked)} style={{ accentColor: C.accent }} /> mostrar concluídas
+          </label>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10, fontSize: 10, fontFamily: FM, color: C.muted }}>
+        {[["Vencida", C.danger], ["Hoje", C.accent], ["Tarefa futura", C.info], ["Follow-up de lead", C.purple], ["Concluída", C.muted]].map(([l, c]) => (
+          <span key={l} style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 2, background: c }} />{l}</span>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0,1fr))", gap: compacto ? 2 : 4 }}>
+        {DIAS_SEM.map(d => <div key={d} style={{ fontFamily: FM, fontSize: 10, color: C.muted, textAlign: "center", textTransform: "uppercase", padding: "4px 0" }}>{compacto ? d[0] : d}</div>)}
+        {dias.map(d => {
+          const k = isoLocal(d);
+          const doMesAtual = d.getMonth() === ref.m;
+          const lista = porDia[k] || [];
+          const pend = lista.filter(i => !feito(i));
+          const ehHoje = k === hj, sel = k === diaSel;
+          const temVenc = pend.some(i => k < hj);
+          const max = 3;
+          return (
+            <div key={k} onClick={() => setDiaSel(k)}
+              style={{ minHeight: compacto ? 52 : 108, background: sel ? C.surface : C.card, border: `1px solid ${sel ? C.accent : ehHoje ? C.accent + "88" : C.border}`, borderRadius: 8, padding: compacto ? 4 : 6, cursor: "pointer", opacity: doMesAtual ? 1 : 0.4, overflow: "hidden", display: "flex", flexDirection: "column", gap: 3 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontFamily: FM, fontSize: 11, fontWeight: ehHoje ? 700 : 400, color: ehHoje ? C.bg : C.text, background: ehHoje ? C.accent : "transparent", borderRadius: 10, padding: ehHoje ? "1px 6px" : 0 }}>{d.getDate()}</span>
+                {compacto && pend.length > 0 && <span style={{ fontFamily: FM, fontSize: 10, fontWeight: 700, color: temVenc ? C.danger : C.info }}>{pend.length}</span>}
+              </div>
+              {!compacto && lista.slice(0, max).map(i => (
+                <div key={i.tipo + i.id} title={`${i.descricao} · ${i.nome}`}
+                  style={{ fontSize: 10, lineHeight: 1.3, padding: "2px 5px", borderRadius: 4, background: cor(i) + "22", borderLeft: `3px solid ${cor(i)}`, color: feito(i) ? C.muted : C.text, textDecoration: feito(i) ? "line-through" : "none", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {i.descricao}
+                </div>
+              ))}
+              {!compacto && lista.length > max && <div style={{ fontSize: 10, fontFamily: FM, color: C.accentLight }}>+{lista.length - max} mais</div>}
+              {compacto && pend.length > 0 && <div style={{ display: "flex", gap: 2, flexWrap: "wrap" }}>{pend.slice(0, 4).map(i => <span key={i.tipo + i.id} style={{ width: 6, height: 6, borderRadius: 3, background: cor(i) }} />)}</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ ...S.card, marginTop: 14 }}>
+        <div style={S.cardTitle}>{diaSel === hj ? "Hoje, " : ""}{fmtDate(diaSel)} <span style={{ fontSize: 12, color: C.muted, fontFamily: FM }}>({itensDia.length})</span></div>
+        {itensDia.length === 0 && <p style={{ color: C.muted, fontSize: 12, marginTop: 0 }}>Nenhuma tarefa neste dia.</p>}
+        {itensDia.map(t => (
+          <div key={t.tipo + t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: C.surface, border: `1px solid ${C.border}`, borderLeft: `3px solid ${cor(t)}`, borderRadius: 8, marginBottom: 5 }}>
+            <input type="checkbox" checked={feito(t)} onChange={() => onToggle(t)} style={{ accentColor: C.accent }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, textDecoration: feito(t) ? "line-through" : "none" }}>{t.descricao}</div>
+              <div style={{ fontSize: 10, fontFamily: FM, color: C.muted, marginTop: 2 }}>{t.nome} · {t.tipo === "followup" ? "Lead" : "Cliente"}</div>
+            </div>
+            {t.tipo === "tarefa" && <button onClick={() => onDelTarefa(t.id)} title="Excluir tarefa" style={{ background: "none", border: "none", color: C.danger, cursor: "pointer", fontSize: 12 }}>✕</button>}
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
+          <div style={{ flex: "2 1 200px" }}><label style={S.lbl}>Nova tarefa para {fmtDate(diaSel)}</label><input style={S.inp} value={nova.descricao} onChange={e => setNova({ ...nova, descricao: e.target.value })} onKeyDown={e => e.key === "Enter" && addTarefa()} placeholder="Ex: Protocolar recurso" /></div>
+          <div style={{ flex: "1 1 180px" }}><label style={S.lbl}>Cliente</label>
+            <select style={S.sel} value={nova.clienteId} onChange={e => setNova({ ...nova, clienteId: e.target.value })}>
+              <option value="">Selecione...</option>
+              {clientesOrd.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", alignItems: "flex-end" }}><button style={{ ...S.btn("primary"), opacity: nova.descricao.trim() && nova.clienteId ? 1 : 0.5 }} onClick={addTarefa}>Adicionar</button></div>
+        </div>
+      </div>
+
+      {semData.length > 0 && (
+        <div style={{ ...S.card }}>
+          <div style={S.cardTitle}>Sem prazo definido <span style={{ fontSize: 12, color: C.muted, fontFamily: FM }}>({semData.length})</span></div>
+          {semData.map(t => (
+            <div key={t.tipo + t.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", fontSize: 12 }}>
+              <input type="checkbox" checked={feito(t)} onChange={() => onToggle(t)} style={{ accentColor: C.accent }} />
+              <span style={{ flex: 1 }}>{t.descricao} <span style={{ color: C.muted, fontFamily: FM, fontSize: 10 }}>· {t.nome}</span></span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // AGENDA GLOBAL
 // ═══════════════════════════════════════════════════════════════════════════
 function AgendaGlobal({ clients, leads, tarefas, followUps, onSaveTarefa, onDelTarefa, onSaveFollowUp }) {
   const hj = hoje();
+  const [modo, setModo] = useState(() => { try { return localStorage.getItem("crm_agenda_modo") || "calendario"; } catch { return "calendario"; } });
+  const trocaModo = m => { setModo(m); try { localStorage.setItem("crm_agenda_modo", m); } catch {} };
   const allTarefas = tarefas.map(t=>({ ...t, nome: clients.find(c=>String(c.id)===String(t.clienteId))?.nome||"?", tipo:"tarefa" }));
   const allFU = followUps.map(f=>({ ...f, nome: leads.find(l=>String(l.id)===String(f.leadId))?.nome||"?", tipo:"followup", concluida:f.concluido }));
   const all = [...allTarefas,...allFU].sort((a,b)=>a.prazo>b.prazo?1:-1);
@@ -2354,12 +2499,23 @@ function AgendaGlobal({ clients, leads, tarefas, followUps, onSaveTarefa, onDelT
 
   return (
     <div>
-      <h2 style={{fontFamily:FD,fontSize:20,color:C.accentLight,marginBottom:18}}>Agenda Geral</h2>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,flexWrap:"wrap",marginBottom:18}}>
+        <h2 style={{fontFamily:FD,fontSize:20,color:C.accentLight,margin:0}}>Agenda Geral</h2>
+        <div style={S.nav}>
+          {[["calendario","Calendário"],["lista","Lista"]].map(([k,l])=>(
+            <button key={k} style={S.navBtn(modo===k)} onClick={()=>trocaModo(k)}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {modo==="calendario" ? (
+        <CalendarioMes items={all} clients={clients} onToggle={toggle} onDelTarefa={onDelTarefa} onSaveTarefa={onSaveTarefa}/>
+      ) : (<>
       {all.length===0&&<p style={{color:C.muted}}>Nenhuma tarefa ou follow-up cadastrado.</p>}
       {renderGroup("Vencidas",venc,C.danger)}
       {renderGroup("Hoje",hoje_,C.accent)}
       {renderGroup("Próximas",fut,C.info)}
       {renderGroup("Concluídas",conc,C.muted)}
+      </>)}
     </div>
   );
 }
