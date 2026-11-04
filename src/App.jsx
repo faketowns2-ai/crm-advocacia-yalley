@@ -7,26 +7,35 @@ const SYNC_INTERVAL = 30000; // 30 segundos
 
 // ─── PALETA & TIPOGRAFIA ─────────────────────────────────────────────────────
 const C = {
-  bg: "#0f0e17", surface: "#1a1930", card: "#211f35", border: "#2e2b4a",
-  accent: "#c9a84c", accentLight: "#e8c97a", text: "#f0ede6", muted: "#8b8aa0",
-  success: "#4caf7d", danger: "#e05c5c", info: "#5b9bd5", purple: "#9b72cf",
-  warn: "#f0a500",
+  bg: "#120826", surface: "#1b0f38", card: "#1f1240", border: "#35246a",
+  accent: "#d4ff3a", accentLight: "#e4ff7a", text: "#f6f3ff", muted: "#a99fd0",
+  success: "#4fd18b", danger: "#ff6b6b", info: "#6aa8ff", purple: "#a77bff",
+  warn: "#ffb547",
 };
-const FD = "'Playfair Display', serif";
-const FB = "'IBM Plex Sans', sans-serif";
-const FM = "'IBM Plex Mono', monospace";
+const FD = "'Inter Tight', 'Inter', sans-serif";
+const FB = "'Inter', sans-serif";
+const FM = "'JetBrains Mono', monospace";
+const PILL = 999;
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
-const STATUS_CLI = ["Novo cliente","Documentação pendente","Aguardando perícia","Em análise INSS","Recurso em andamento","Benefício concedido","Benefício indeferido","Encerrado"];
-const BENEFICIOS = ["Aposentadoria por Invalidez","Aposentadoria por Tempo de Contribuição","Aposentadoria por Idade","Benefício de Prestação Continuada (BPC/LOAS)","Auxílio-Doença","Auxílio-Acidente","Pensão por Morte","Salário-Maternidade","Revisão de Benefício"];
+const STATUS_CLI = ["Novo cliente","Documentação pendente","Aguardando perícia","Em análise INSS","Recurso em andamento","Benefício concedido","Benefício indeferido","Notificação extrajudicial","Ação ajuizada","Liminar deferida","Acordo firmado","Sentença procedente","Sentença improcedente","Encerrado"];
+const BENEFICIOS_PREV = ["Aposentadoria por Invalidez","Aposentadoria por Tempo de Contribuição","Aposentadoria por Idade","Benefício de Prestação Continuada (BPC/LOAS)","Auxílio-Doença","Auxílio-Acidente","Pensão por Morte","Salário-Maternidade","Revisão de Benefício"];
+const PRODUTOS_BANC = ["Busca e Apreensão de Veículo","Revisional de Financiamento de Veículo","Tarifa de Avaliação do Bem e Registro de Contrato","Cancelamento de Seguro (Venda Casada)","Revisão de Juros Abusivos (Empréstimo/Cartão)","Cartão Consignado RMC/RCC","Empréstimo Consignado Não Contratado","Descontos Indevidos no Benefício INSS","Superendividamento","Golpe/Fraude Bancária (PIX)","Negativação Indevida","Tarifas Bancárias Indevidas"];
+// Lista única usada em todos os seletores (previdenciário primeiro: o 1º item é o padrão do cliente novo)
+const BENEFICIOS = [...BENEFICIOS_PREV, ...PRODUTOS_BANC];
+const ehBancario = (produto) => PRODUTOS_BANC.includes(produto);
+// Produtos bancários que também envolvem o INSS (descontos em benefício)
+const ehBancarioINSS = (produto) => ["Cartão Consignado RMC/RCC","Empréstimo Consignado Não Contratado","Descontos Indevidos no Benefício INSS"].includes(produto);
+// Status que contam como êxito no painel
+const STATUS_EXITO = ["Benefício concedido","Acordo firmado","Sentença procedente"];
 const TEMP_OPTS = ["🔥 Quente","🟡 Morno","❄️ Frio"];
 const ORIGEM_OPTS = ["Instagram","WhatsApp","Indicação","Facebook","Google","Presencial","Outro"];
 const STATUS_LEAD = ["Novo contato","Em negociação","Proposta enviada","Aguardando retorno","Convertido","Perdido"];
 const ESTADO_CIVIL = ["Solteiro(a)","Casado(a)","Divorciado(a)","Viúvo(a)","União estável","Separado(a)"];
 const NACIONALIDADES = ["brasileiro(a)","brasileira naturalizada","estrangeiro(a)"];
-const TIMELINE_TIPOS = ["Protocolo INSS","Perícia agendada","Perícia realizada","Exigência cumprida","Recurso interposto","Decisão administrativa","Ação judicial ajuizada","Sentença","Benefício concedido","Benefício indeferido","Outro"];
+const TIMELINE_TIPOS = ["Protocolo INSS","Perícia agendada","Perícia realizada","Exigência cumprida","Recurso interposto","Decisão administrativa","Ação judicial ajuizada","Sentença","Benefício concedido","Benefício indeferido","Notificação extrajudicial ao banco","Liminar deferida","Audiência de conciliação","Acordo firmado","Outro"];
 
-const statusColor = { "Novo cliente":C.info,"Documentação pendente":C.warn,"Aguardando perícia":C.purple,"Em análise INSS":C.accent,"Recurso em andamento":C.danger,"Benefício concedido":C.success,"Benefício indeferido":C.danger,"Encerrado":C.muted };
+const statusColor = { "Novo cliente":C.info,"Documentação pendente":C.warn,"Aguardando perícia":C.purple,"Em análise INSS":C.accent,"Recurso em andamento":C.danger,"Benefício concedido":C.success,"Benefício indeferido":C.danger,"Notificação extrajudicial":C.warn,"Ação ajuizada":C.accent,"Liminar deferida":C.purple,"Acordo firmado":C.success,"Sentença procedente":C.success,"Sentença improcedente":C.danger,"Encerrado":C.muted };
 const tempColor = { "🔥 Quente":C.danger,"🟡 Morno":C.warn,"❄️ Frio":C.info };
 const leadStatusColor = { "Novo contato":C.info,"Em negociação":C.accent,"Proposta enviada":C.purple,"Aguardando retorno":C.warn,"Convertido":C.success,"Perdido":C.muted };
 
@@ -56,7 +65,7 @@ const api = {
 };
 
 // Indeferido: os honorários contratados não entram no faturamento; só conta o que de fato foi pago
-function ehIndeferido(c) { return /indeferid/i.test(String(c?.status||"")); }
+function ehIndeferido(c) { return /indeferid|improcedente/i.test(String(c?.status||"")); }
 function valorFaturavel(c) { return ehIndeferido(c) ? recebidoCli(c) : (Number(c.valorHonorarios)||0); }
 
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
@@ -167,16 +176,29 @@ function gerarDoc(tipo, c) {
   const rg = c.rg || "___________";
   const end = c.endereco || "___________";
   const ben = c.beneficio || "benefício previdenciário";
+  const banc = ehBancario(c.beneficio);
+  const objetoContrato = banc
+    ? `O presente contrato tem por objeto a prestação de serviços advocatícios consistentes na representação extrajudicial e/ou judicial do(a) CONTRATANTE em face de instituição(ões) financeira(s), administradora(s) de cartão, seguradora(s), órgãos de proteção ao crédito${ehBancarioINSS(c.beneficio)?", INSS":""} e demais entidades envolvidas, em demanda de ${ben}, inclusive com análise de contratos e extratos, notificações, reclamações administrativas, propositura de ação, defesa, acompanhamento processual e adoção das medidas necessárias à efetivação do direito.`
+    : `O presente contrato tem por objeto a prestação de serviços advocatícios consistentes na representação administrativa e/ou judicial perante o INSS e demais órgãos competentes, visando ao requerimento, concessão, restabelecimento ou conversão de ${ben}, inclusive com análise de documentos, elaboração de requerimentos, acompanhamento processual e adoção das medidas necessárias à efetivação do direito.`;
+  const baseExito = banc
+    ? "sobre o proveito econômico obtido, assim entendidos os valores restituídos, as indenizações recebidas e as reduções de dívida alcançadas, seja na via extrajudicial ou judicial."
+    : "sobre os valores retroativos recebidos, seja na via administrativa ou judicial.";
+  const creditoPagamento = banc ? "recebimento dos valores pelo(a) CONTRATANTE" : "crédito do benefício ou dos retroativos";
+  const valoresDesconto = banc ? "valores recebidos" : "valores retroativos";
+  const dadosLGPD = banc ? ", contratos, extratos e informações bancárias" : " e credenciais GOV.BR";
+  const poderesEspecificos = banc
+    ? `praticar atos perante instituições financeiras, administradoras de cartão de crédito, seguradoras, Banco Central do Brasil, PROCON, plataforma consumidor.gov.br, órgãos de proteção ao crédito${ehBancarioINSS(c.beneficio)?", INSS":""} e demais órgãos públicos ou privados, requerer cópias de contratos, extratos, faturas e demais documentos bancários, contestar débitos, negociar e firmar acordos,`
+    : "requerer, acompanhar e revisar benefícios previdenciários e assistenciais, solicitar perícias médicas, administrativas ou judiciais, praticar atos perante o INSS e demais órgãos públicos ou privados,";
   const hon = fmtCur(c.valorHonorarios);
   const parc = c.parcelamentoTotal || 1;
   const vp = fmtCur(c.parcelamentoValor || c.valorHonorarios);
   const qual = qualificacaoParte(c);
 
-  if (tipo === "contrato") return `CONTRATO DE HONORÁRIOS ADVOCATÍCIOS\n\nContrato de Prestação de Serviços Advocatícios que fazem entre si, de um lado, ${qual}, doravante denominado(a) CONTRATANTE; e, de outro lado, YALLEY DA SILVA VASCONCELOS, Advogado, inscrito na OAB/AP n° 3262, com escritório profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098, doravante denominado CONTRATADO, ajustam o presente contrato mediante as cláusulas e condições seguintes.\n\nCLÁUSULA 1ª - DO OBJETO\n\nO presente contrato tem por objeto a prestação de serviços advocatícios consistentes na representação administrativa e/ou judicial perante o INSS e demais órgãos competentes, visando ao requerimento, concessão, restabelecimento ou conversão de ${ben}, inclusive com análise de documentos, elaboração de requerimentos, acompanhamento processual e adoção das medidas necessárias à efetivação do direito.\n\nParágrafo único. A interposição de recursos administrativos, ações judiciais autônomas, cumprimento de sentença, execução de valores atrasados ou quaisquer medidas não expressamente previstas dependerão de novo contrato específico.\n\nCLÁUSULA 2ª - DA REMUNERAÇÃO\n\nOs honorários advocatícios correspondem ao valor de ${hon}, a serem pagos em ${parc}x de ${vp}, observando-se a Tabela de Honorários da OAB/AP.\n\n§1°. O(A) CONTRATANTE pagará ao CONTRATADO o percentual de 30% (trinta por cento) sobre os valores retroativos recebidos, seja na via administrativa ou judicial.\n\n§2°. Os valores poderão ser quitados à vista ou mediante desconto direto dos valores retroativos, mediante autorização expressa.\n\n§3°. Eventuais despesas com certidões, cópias, perícias e custas judiciais correrão por conta do(a) CONTRATANTE, mediante apresentação de comprovantes.\n\n§4°. Caso necessária a propositura de ação judicial, os honorários ora pactuados abrangem também essa fase.\n\nCLÁUSULA 3ª - DO PAGAMENTO\n\nOs honorários somente serão devidos em caso de êxito total ou parcial.\n\n§1° - O pagamento deverá ocorrer no prazo máximo de 2 (dois) dias úteis após o crédito do benefício ou dos retroativos.\n\n§2° - O atraso no pagamento ensejará multa de 10% (dez por cento) e juros de mora de 1% (um por cento) ao mês.\n\n§3° - O(A) CONTRATANTE autoriza o CONTRATADO a reter diretamente os honorários no momento do levantamento dos valores.\n\nCLÁUSULA 4ª - DA DURAÇÃO E RESCISÃO\n\nO presente contrato vigorará até a conclusão definitiva do processo administrativo ou judicial.\n\n§1° - A rescisão imotivada pelo(a) CONTRATANTE implicará o pagamento integral dos honorários, nos termos do art. 22, §3°, da Lei n° 8.906/94.\n\n§2° - O não fornecimento de documentos e informações necessárias constitui descumprimento contratual, autorizando a rescisão imediata.\n\nCLÁUSULA 5ª - DO SIGILO E PROTEÇÃO DE DADOS\n\nO(A) CONTRATANTE autoriza o uso de seus dados pessoais e credenciais GOV.BR, exclusivamente para execução dos serviços contratados, conforme a Lei n° 13.709/2018 (LGPD).\n\nCLÁUSULA 6ª - DO FORO\n\nFica eleito o foro da Comarca de Macapá/AP para dirimir eventuais controvérsias.\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"CONTRATANTE")}\n\n\n_________________________________________\nYALLEY DA SILVA VASCONCELOS\nOAB/AP n° 3262`;
+  if (tipo === "contrato") return `CONTRATO DE HONORÁRIOS ADVOCATÍCIOS\n\nContrato de Prestação de Serviços Advocatícios que fazem entre si, de um lado, ${qual}, doravante denominado(a) CONTRATANTE; e, de outro lado, YALLEY DA SILVA VASCONCELOS, Advogado, inscrito na OAB/AP n° 3262, com escritório profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098, doravante denominado CONTRATADO, ajustam o presente contrato mediante as cláusulas e condições seguintes.\n\nCLÁUSULA 1ª - DO OBJETO\n\n${objetoContrato}\n\nParágrafo único. A interposição de recursos administrativos, ações judiciais autônomas, cumprimento de sentença, execução de valores atrasados ou quaisquer medidas não expressamente previstas dependerão de novo contrato específico.\n\nCLÁUSULA 2ª - DA REMUNERAÇÃO\n\nOs honorários advocatícios correspondem ao valor de ${hon}, a serem pagos em ${parc}x de ${vp}, observando-se a Tabela de Honorários da OAB/AP.\n\n§1°. O(A) CONTRATANTE pagará ao CONTRATADO o percentual de 30% (trinta por cento) ${baseExito}\n\n§2°. Os valores poderão ser quitados à vista ou mediante desconto direto dos ${valoresDesconto}, mediante autorização expressa.\n\n§3°. Eventuais despesas com certidões, cópias, perícias e custas judiciais correrão por conta do(a) CONTRATANTE, mediante apresentação de comprovantes.\n\n§4°. Caso necessária a propositura de ação judicial, os honorários ora pactuados abrangem também essa fase.\n\nCLÁUSULA 3ª - DO PAGAMENTO\n\nOs honorários somente serão devidos em caso de êxito total ou parcial.\n\n§1° - O pagamento deverá ocorrer no prazo máximo de 2 (dois) dias úteis após o ${creditoPagamento}.\n\n§2° - O atraso no pagamento ensejará multa de 10% (dez por cento) e juros de mora de 1% (um por cento) ao mês.\n\n§3° - O(A) CONTRATANTE autoriza o CONTRATADO a reter diretamente os honorários no momento do levantamento dos valores.\n\nCLÁUSULA 4ª - DA DURAÇÃO E RESCISÃO\n\nO presente contrato vigorará até a conclusão definitiva do processo administrativo ou judicial.\n\n§1° - A rescisão imotivada pelo(a) CONTRATANTE implicará o pagamento integral dos honorários, nos termos do art. 22, §3°, da Lei n° 8.906/94.\n\n§2° - O não fornecimento de documentos e informações necessárias constitui descumprimento contratual, autorizando a rescisão imediata.\n\nCLÁUSULA 5ª - DO SIGILO E PROTEÇÃO DE DADOS\n\nO(A) CONTRATANTE autoriza o uso de seus dados pessoais${dadosLGPD}, exclusivamente para execução dos serviços contratados, conforme a Lei n° 13.709/2018 (LGPD).\n\nCLÁUSULA 6ª - DO FORO\n\nFica eleito o foro da Comarca de Macapá/AP para dirimir eventuais controvérsias.\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"CONTRATANTE")}\n\n\n_________________________________________\nYALLEY DA SILVA VASCONCELOS\nOAB/AP n° 3262`;
 
   if (tipo === "hiposuficiencia") return `DECLARAÇÃO DE HIPOSSUFICIÊNCIA ECONÔMICA\n\nEu, ${qual}.\n\nDECLARO, para os devidos fins de direito, especialmente para instruir pedido de concessão dos benefícios da Justiça Gratuita, nos termos do artigo 98 do Código de Processo Civil e artigo 5°, inciso LXXIV, da Constituição Federal, que não possuo condições financeiras de arcar com as custas processuais, despesas judiciais e honorários advocatícios sem prejuízo do meu próprio sustento e de minha família.\n\nDeclaro ainda que as informações acima são verdadeiras, estando ciente de que a falsidade desta declaração poderá implicar nas sanções civis, penais e processuais cabíveis.\n\nTermos em que,\nPede deferimento.\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"DECLARANTE")}`;
 
-  if (tipo === "procuracao") return `PROCURAÇÃO\n\nOUTORGANTE: ${qual}.\n\nOUTORGADO: YALLEY DA SILVA VASCONCELOS, advogado, inscrito na OAB/AP n° 3262, com endereço profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098.\n\n\nA OUTORGANTE nomeia e constitui como seu bastante procurador o OUTORGADO, conferindo-lhe amplos, gerais e ilimitados poderes para representá-la ad judicia et ad extra, em todo o território nacional, POR PRAZO INDETERMINADO, em qualquer instância, juízo, tribunal ou órgão público ou privado, inclusive em processos físicos ou eletrônicos, podendo propor ações, acompanhar processos, apresentar defesa, confessar, reconhecer a procedência do pedido, transigir, desistir, renunciar a direitos, firmar compromissos, celebrar acordos, recorrer, firmar declarações, requerer, acompanhar e revisar benefícios previdenciários e assistenciais, solicitar perícias médicas, administrativas ou judiciais, praticar atos perante o INSS e demais órgãos públicos ou privados, receber valores, levantar alvarás, dar quitação, realizar peticionamento eletrônico, atuar em sistemas judiciais e administrativos, receber citações e intimações eletrônicas, utilizar certificação digital, acessar, tratar e compartilhar dados pessoais e dados sensíveis, nos limites da finalidade deste mandato, ratificando desde já todos os atos anteriormente praticados relacionados ao presente mandato, podendo, ainda, substabelecer, no todo ou em parte, com ou sem reserva de poderes.\n\nA presente procuração referente ao processo de ${ben} é firmada por meio de assinatura eletrônica, nos termos da MP n° 2.200-2/2001 e da Lei n° 14.063/2020, sendo plenamente válida para todos os fins legais.\n\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"OUTORGANTE")}`;
+  if (tipo === "procuracao") return `PROCURAÇÃO\n\nOUTORGANTE: ${qual}.\n\nOUTORGADO: YALLEY DA SILVA VASCONCELOS, advogado, inscrito na OAB/AP n° 3262, com endereço profissional à Rua Tiradentes, n° 624 (altos), Bairro Centro, Macapá/AP - CEP 68900-098.\n\n\nA OUTORGANTE nomeia e constitui como seu bastante procurador o OUTORGADO, conferindo-lhe amplos, gerais e ilimitados poderes para representá-la ad judicia et ad extra, em todo o território nacional, POR PRAZO INDETERMINADO, em qualquer instância, juízo, tribunal ou órgão público ou privado, inclusive em processos físicos ou eletrônicos, podendo propor ações, acompanhar processos, apresentar defesa, confessar, reconhecer a procedência do pedido, transigir, desistir, renunciar a direitos, firmar compromissos, celebrar acordos, recorrer, firmar declarações, ${poderesEspecificos} receber valores, levantar alvarás, dar quitação, realizar peticionamento eletrônico, atuar em sistemas judiciais e administrativos, receber citações e intimações eletrônicas, utilizar certificação digital, acessar, tratar e compartilhar dados pessoais e dados sensíveis, nos limites da finalidade deste mandato, ratificando desde já todos os atos anteriormente praticados relacionados ao presente mandato, podendo, ainda, substabelecer, no todo ou em parte, com ou sem reserva de poderes.\n\nA presente procuração referente ao ${banc?"caso":"processo"} de ${ben} é firmada por meio de assinatura eletrônica, nos termos da MP n° 2.200-2/2001 e da Lei n° 14.063/2020, sendo plenamente válida para todos os fins legais.\n\n\nMacapá/AP, ${dt}.\n\n\n${blocoAssinatura(c,"OUTORGANTE")}`;
 
   return "Tipo não reconhecido.";
 }
@@ -274,7 +296,7 @@ async function gerarMsgDocumento(cliente, base64, mediaType, fileName, orientaca
   const bloco = mt === "application/pdf"
     ? { type:"document", source:{ type:"base64", media_type:"application/pdf", data: base64 } }
     : { type:"image", source:{ type:"base64", media_type: mt, data: base64 } };
-  let p = `Você é o assistente do advogado previdenciário ${ASSINATURA}. Leia o documento anexo (pode ser decisão do INSS, carta de exigência, comunicado, sentença, despacho, extrato ou outro) e escreva uma mensagem de WhatsApp para o cliente ${String(cliente.nome||"").split(" ")[0]}, cujo processo é de ${cliente.beneficio||"benefício previdenciário"}.
+  let p = `Você é o assistente do advogado ${ehBancario(cliente.beneficio)?"de direito bancário":"previdenciário"} ${ASSINATURA}. Leia o documento anexo (pode ser decisão do INSS, contrato ou extrato bancário, carta de exigência, comunicado, sentença, despacho, extrato ou outro) e escreva uma mensagem de WhatsApp para o cliente ${String(cliente.nome||"").split(" ")[0]}, cujo processo é de ${cliente.beneficio||"benefício previdenciário"}.
 
 Regras:
 1. Linguagem simples, como se explicasse para alguém sem estudo jurídico. Nada de juridiquês; se precisar de um termo técnico, explique entre parênteses.
@@ -307,7 +329,7 @@ function abrirWhatsApp(tel, texto="") {
 function alertaWhats() {
   const d = document.createElement("div");
   d.textContent = "Telefone do cliente inválido ou vazio. Corrija na aba Dados (DDD + número).";
-  Object.assign(d.style,{position:"fixed",bottom:"20px",left:"50%",transform:"translateX(-50%)",background:"#e05c5c",color:"#fff",padding:"10px 16px",borderRadius:"8px",fontSize:"13px",zIndex:9999,fontFamily:"sans-serif"});
+  Object.assign(d.style,{position:"fixed",bottom:"20px",left:"50%",transform:"translateX(-50%)",background:"#ff6b6b",color:"#fff",padding:"10px 18px",borderRadius:"999px",fontSize:"13px",zIndex:9999,fontFamily:"sans-serif"});
   document.body.appendChild(d); setTimeout(()=>d.remove(),4000);
 }
 
@@ -323,28 +345,28 @@ async function buscarCEP(cep) {
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const S = {
-  app: { fontFamily:FB, background:C.bg, color:C.text, minHeight:"100vh", display:"flex", flexDirection:"column" },
-  header: { background:`linear-gradient(135deg,${C.surface} 0%,#15132a 100%)`, borderBottom:`1px solid ${C.border}`, padding:"14px 24px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100, gap:12, flexWrap:"wrap" },
-  logo: { fontFamily:FD, fontSize:20, color:C.accentLight, letterSpacing:"0.02em" },
-  logoSub: { fontSize:10, color:C.muted, fontFamily:FM, letterSpacing:"0.1em", textTransform:"uppercase" },
-  nav: { display:"flex", gap:3, background:C.card, borderRadius:10, padding:3, border:`1px solid ${C.border}`, flexWrap:"wrap" },
-  navBtn: a => ({ padding:"7px 14px", borderRadius:7, border:"none", cursor:"pointer", fontSize:12, fontFamily:FB, fontWeight:a?600:400, background:a?C.accent:"transparent", color:a?C.bg:C.muted, transition:"all 0.2s", whiteSpace:"nowrap" }),
-  main: { flex:1, padding:"20px 24px", maxWidth:1400, margin:"0 auto", width:"100%", boxSizing:"border-box" },
-  card: { background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:18, marginBottom:14 },
-  cardTitle: { fontFamily:FD, fontSize:17, color:C.accentLight, marginBottom:14, paddingBottom:10, borderBottom:`1px solid ${C.border}` },
-  grid2: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:12 },
-  grid3: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:10 },
-  inp: { background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 12px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" },
-  sel: { background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 12px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" },
-  lbl: { display:"block", fontSize:10, color:C.muted, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.07em", fontFamily:FM },
-  btn: v => ({ padding:"8px 16px", borderRadius:8, border:"none", cursor:"pointer", fontSize:12, fontWeight:600, fontFamily:FB, transition:"all 0.2s", background:v==="primary"?C.accent:v==="success"?C.success:v==="danger"?C.danger:v==="info"?C.info:v==="warn"?C.warn:v==="ghost"?"transparent":C.surface, color:v==="primary"?C.bg:v==="ghost"?C.muted:C.text, border:v==="ghost"?`1px solid ${C.border}`:"none" }),
-  badge: col => ({ display:"inline-block", padding:"2px 9px", borderRadius:20, fontSize:10, fontWeight:600, background:col+"22", color:col, border:`1px solid ${col}44`, fontFamily:FM }),
-  textarea: { background:C.surface, border:`1px solid ${C.border}`, borderRadius:8, padding:"9px 12px", color:C.text, fontFamily:FM, fontSize:12, width:"100%", boxSizing:"border-box", outline:"none", resize:"vertical", lineHeight:1.7 },
-  modal: { position:"fixed", inset:0, background:"rgba(0,0,0,0.75)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 },
-  modalBox: { background:C.card, border:`1px solid ${C.border}`, borderRadius:14, padding:24, maxWidth:680, width:"100%", maxHeight:"88vh", overflowY:"auto" },
-  stat: { background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:"16px 18px", textAlign:"center" },
-  statVal: { fontFamily:FD, fontSize:26, display:"block" },
-  statLbl: { fontSize:10, color:C.muted, textTransform:"uppercase", letterSpacing:"0.08em", fontFamily:FM, marginTop:3 },
+  app: { fontFamily:FB, background:"transparent", color:C.text, minHeight:"100vh", display:"flex", flexDirection:"column" },
+  header: { background:"rgba(18,8,38,0.72)", backdropFilter:"blur(14px)", WebkitBackdropFilter:"blur(14px)", borderBottom:"1px solid rgba(255,255,255,0.07)", padding:"14px 28px", display:"flex", alignItems:"center", justifyContent:"space-between", position:"sticky", top:0, zIndex:100, gap:12, flexWrap:"wrap" },
+  logo: { fontFamily:FD, fontSize:20, fontWeight:800, color:C.text, letterSpacing:"-0.02em", textTransform:"uppercase", lineHeight:1 },
+  logoSub: { fontSize:10, color:C.muted, fontFamily:FB, fontWeight:600, letterSpacing:"0.14em", textTransform:"uppercase", marginTop:4 },
+  nav: { display:"flex", gap:4, background:"rgba(255,255,255,0.04)", borderRadius:PILL, padding:4, border:"1px solid rgba(255,255,255,0.1)", flexWrap:"wrap" },
+  navBtn: a => ({ padding:"8px 16px", borderRadius:PILL, border:"none", cursor:"pointer", fontSize:11, fontFamily:FB, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase", background:a?C.accent:"transparent", color:a?C.bg:C.muted, transition:"all 0.2s", whiteSpace:"nowrap", boxShadow:a?"0 0 24px rgba(212,255,58,0.35)":"none" }),
+  main: { flex:1, padding:"28px 28px", maxWidth:1400, margin:"0 auto", width:"100%", boxSizing:"border-box" },
+  card: { background:"linear-gradient(180deg,rgba(255,255,255,0.05) 0%,rgba(255,255,255,0.02) 100%)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:22, padding:22, marginBottom:16, boxShadow:"0 10px 40px rgba(5,0,20,0.35)" },
+  cardTitle: { fontFamily:FD, fontSize:18, fontWeight:800, color:C.text, letterSpacing:"-0.01em", textTransform:"uppercase", marginBottom:16, paddingBottom:12, borderBottom:"1px solid rgba(255,255,255,0.08)" },
+  grid2: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:14 },
+  grid3: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:12 },
+  inp: { background:"rgba(8,2,22,0.55)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:14, padding:"10px 14px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" },
+  sel: { background:"rgba(8,2,22,0.55)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:14, padding:"10px 14px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" },
+  lbl: { display:"block", fontSize:10, color:C.muted, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:FB, fontWeight:700 },
+  btn: v => ({ padding:"10px 20px", borderRadius:PILL, cursor:"pointer", fontSize:11, fontWeight:800, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:FB, transition:"all 0.2s", background:v==="primary"?C.accent:v==="success"?C.success:v==="danger"?C.danger:v==="info"?C.info:v==="warn"?C.warn:v==="ghost"?"transparent":"rgba(255,255,255,0.08)", color:v==="primary"||v==="success"||v==="warn"?C.bg:v==="ghost"?C.text:C.text, border:v==="ghost"?"1px solid rgba(255,255,255,0.22)":"none", boxShadow:v==="primary"?"0 0 28px rgba(212,255,58,0.28)":"none" }),
+  badge: col => ({ display:"inline-block", padding:"3px 10px", borderRadius:PILL, fontSize:10, fontWeight:700, letterSpacing:"0.04em", background:col+"1f", color:col, border:`1px solid ${col}55`, fontFamily:FB }),
+  textarea: { background:"rgba(8,2,22,0.55)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:14, padding:"10px 14px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none", resize:"vertical", lineHeight:1.7 },
+  modal: { position:"fixed", inset:0, background:"rgba(8,2,22,0.7)", backdropFilter:"blur(8px)", WebkitBackdropFilter:"blur(8px)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 },
+  modalBox: { background:"#170c33", border:"1px solid rgba(255,255,255,0.1)", borderRadius:28, padding:28, maxWidth:680, width:"100%", maxHeight:"88vh", overflowY:"auto", boxShadow:"0 30px 80px rgba(0,0,0,0.55)" },
+  stat: { background:"linear-gradient(180deg,rgba(255,255,255,0.06) 0%,rgba(255,255,255,0.02) 100%)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:22, padding:"20px 18px", textAlign:"left" },
+  statVal: { fontFamily:FD, fontSize:30, fontWeight:800, letterSpacing:"-0.03em", display:"block", lineHeight:1.1 },
+  statLbl: { fontSize:10, color:C.muted, textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:FB, fontWeight:700, marginTop:6 },
 };
 
 // ─── COMPONENTES BASE ─────────────────────────────────────────────────────────
@@ -916,8 +938,8 @@ function Parcelas({ cliente, onChange }) {
 // DASHBOARD
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── FATURAMENTO (card do topo do painel + gráfico por benefício) ─────────────
-const COR_RECEBIDO = "#a8862f";   // validado (contraste e daltonismo) contra o fundo escuro
-const COR_ARECEBER = "#3f7ab5";
+const COR_RECEBIDO = "#b5e02a";   // validado (contraste e daltonismo) contra o fundo escuro
+const COR_ARECEBER = "#8a63f2";
 function Faturamento({ clients, onIr }) {
   const [per, setPer] = useState("mes");
   const [dIni, setDIni] = useState("");
@@ -967,7 +989,7 @@ function Faturamento({ clients, onIr }) {
     <div style={{...S.card,marginBottom:16,border:`1px solid ${C.accent}55`}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:10,marginBottom:12}}>
         <div>
-          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Faturamento {ben?`· ${ben}`:"· todos os benefícios"}</div>
+          <div style={{fontSize:10,color:C.muted,fontFamily:FM,textTransform:"uppercase",letterSpacing:1}}>Faturamento {ben?`· ${ben}`:"· todos os produtos"}</div>
           <div style={{fontFamily:FD,fontSize:34,color:C.accentLight,lineHeight:1.1}}>{fmtCur(contratado)}</div>
           <div style={{fontSize:11,color:C.muted,fontFamily:FM}}>honorários contratados {iv?`de ${fmtDate(iv[0])} a ${fmtDate(iv[1])}`:"em todo o período"} · {nValidos} contrato(s)</div>
           {indef.length>0&&<div className="card-click" onClick={()=>onIr("clientes",{status:"Benefício indeferido"})} title="Ver clientes indeferidos" style={{display:"inline-block",marginTop:4,fontSize:11,color:C.danger,fontFamily:FM,cursor:"pointer",border:`1px solid transparent`,borderRadius:6,padding:"1px 4px"}}>− {indef.length} indeferido(s) fora do faturamento ({fmtCur(indefValor)}) →</div>}
@@ -978,7 +1000,7 @@ function Faturamento({ clients, onIr }) {
             <div><label style={S.lbl}>De</label><input type="date" style={S.inp} value={dIni} onChange={e=>setDIni(e.target.value)}/></div>
             <div><label style={S.lbl}>Até</label><input type="date" style={S.inp} value={dFim} onChange={e=>setDFim(e.target.value)}/></div>
           </>}
-          <div><label style={S.lbl}>Benefício</label><select style={{...S.sel,minWidth:180}} value={ben} onChange={e=>setBen(e.target.value)}><option value="">Todos</option>{Object.keys(mapa).sort().map(b=><option key={b}>{b}</option>)}</select></div>
+          <div><label style={S.lbl}>Produto / Serviço</label><select style={{...S.sel,minWidth:180}} value={ben} onChange={e=>setBen(e.target.value)}><option value="">Todos</option>{Object.keys(mapa).sort().map(b=><option key={b}>{b}</option>)}</select></div>
         </div>
       </div>
 
@@ -990,7 +1012,7 @@ function Faturamento({ clients, onIr }) {
       </div>
 
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:8}}>
-        <div style={{fontFamily:FD,fontSize:15,color:C.accentLight}}>Desempenho por benefício</div>
+        <div style={{fontFamily:FD,fontSize:15,color:C.accentLight}}>Desempenho por produto</div>
         <div style={{display:"flex",gap:14,alignItems:"center",fontSize:11,color:C.muted}}>
           <span style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:2,background:COR_RECEBIDO,display:"inline-block"}}/>Recebido</span>
           <span style={{display:"inline-flex",alignItems:"center",gap:5}}><span style={{width:10,height:10,borderRadius:2,background:COR_ARECEBER,display:"inline-block"}}/>A receber</span>
@@ -1030,7 +1052,7 @@ function Faturamento({ clients, onIr }) {
       {tabela && linhas.length>0 && (
         <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
           <thead><tr style={{color:C.muted,fontFamily:FM,fontSize:10,textTransform:"uppercase"}}>
-            <th style={{textAlign:"left",padding:6}}>Benefício</th><th style={{textAlign:"right",padding:6}}>Contratos</th><th style={{textAlign:"right",padding:6}}>Contratado</th><th style={{textAlign:"right",padding:6}}>Recebido</th><th style={{textAlign:"right",padding:6}}>A receber</th><th style={{textAlign:"right",padding:6}}>%</th>
+            <th style={{textAlign:"left",padding:6}}>Produto / Serviço</th><th style={{textAlign:"right",padding:6}}>Contratos</th><th style={{textAlign:"right",padding:6}}>Contratado</th><th style={{textAlign:"right",padding:6}}>Recebido</th><th style={{textAlign:"right",padding:6}}>A receber</th><th style={{textAlign:"right",padding:6}}>%</th>
           </tr></thead>
           <tbody>{linhas.map(l=>(
             <tr key={l.nome} onClick={()=>!l.outros&&setBen(ben===l.nome?"":l.nome)} style={{borderTop:`1px solid ${C.border}`,cursor:l.outros?"default":"pointer",opacity:!ben||l.nome===ben?1:0.4}}>
@@ -1089,7 +1111,7 @@ function Recebimentos({ clients, onSelect, preset = {} }) {
   const porBen = agrupar(doPer.filter(t=>!forma||t.forma===forma), "beneficio");
 
   const exportCSV = () => {
-    const linhas = [["Data","Cliente","Benefício","Parcela","Valor","Forma","Observação"].join(";"), ...lista.map(t=>[fmtDate(t.data)||"sem data", t.nome, t.beneficio, `${t.n}/${t.total}`, String(t.valor).replace(".",","), t.forma, (t.obs||"").replace(/;/g,",")].join(";"))];
+    const linhas = [["Data","Cliente","Produto / Serviço","Parcela","Valor","Forma","Observação"].join(";"), ...lista.map(t=>[fmtDate(t.data)||"sem data", t.nome, t.beneficio, `${t.n}/${t.total}`, String(t.valor).replace(".",","), t.forma, (t.obs||"").replace(/;/g,",")].join(";"))];
     const blob = new Blob(["﻿"+linhas.join("\n")],{type:"text/csv;charset=utf-8"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="recebimentos.csv"; a.click();
   };
@@ -1107,7 +1129,7 @@ function Recebimentos({ clients, onSelect, preset = {} }) {
             <div><label style={S.lbl}>De</label><input type="date" style={S.inp} value={dIni} onChange={e=>setDIni(e.target.value)}/></div>
             <div><label style={S.lbl}>Até</label><input type="date" style={S.inp} value={dFim} onChange={e=>setDFim(e.target.value)}/></div>
           </>}
-          <div><label style={S.lbl}>Benefício</label><select style={{...S.sel,minWidth:170}} value={ben} onChange={e=>setBen(e.target.value)}><option value="">Todos</option>{[...new Set(todos.map(t=>t.beneficio))].sort().map(b=><option key={b}>{b}</option>)}</select></div>
+          <div><label style={S.lbl}>Produto / Serviço</label><select style={{...S.sel,minWidth:170}} value={ben} onChange={e=>setBen(e.target.value)}><option value="">Todos</option>{[...new Set(todos.map(t=>t.beneficio))].sort().map(b=><option key={b}>{b}</option>)}</select></div>
           <div><label style={S.lbl}>Forma</label><select style={{...S.sel,minWidth:140}} value={forma} onChange={e=>setForma(e.target.value)}><option value="">Todas</option>{[...new Set(todos.map(t=>t.forma))].sort().map(f=><option key={f}>{f}</option>)}</select></div>
           <button style={S.btn("ghost")} onClick={exportCSV}>↓ CSV</button>
         </div>
@@ -1138,7 +1160,7 @@ function Recebimentos({ clients, onSelect, preset = {} }) {
           <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:640}}>
               <thead><tr style={{color:C.muted,fontFamily:FM,fontSize:10,textTransform:"uppercase"}}>
-                <th style={{textAlign:"left",padding:6}}>Data</th><th style={{textAlign:"left",padding:6}}>Cliente</th><th style={{textAlign:"left",padding:6}}>Benefício</th><th style={{textAlign:"center",padding:6}}>Parcela</th><th style={{textAlign:"left",padding:6}}>Forma</th><th style={{textAlign:"right",padding:6}}>Valor</th>
+                <th style={{textAlign:"left",padding:6}}>Data</th><th style={{textAlign:"left",padding:6}}>Cliente</th><th style={{textAlign:"left",padding:6}}>Produto / Serviço</th><th style={{textAlign:"center",padding:6}}>Parcela</th><th style={{textAlign:"left",padding:6}}>Forma</th><th style={{textAlign:"right",padding:6}}>Valor</th>
               </tr></thead>
               <tbody>{lista.map((t,i)=>(
                 <tr key={i} onClick={()=>onSelect(t.cli)} title="Abrir cliente" className="card-click" style={{borderTop:`1px solid ${C.border}`,cursor:"pointer"}}>
@@ -1507,8 +1529,8 @@ function MetasMensais({ sem, meses, mesInicial, produtos, ms, metas, onSave }) {
 
 function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNewLead, onIr = ()=>{} }) {
   const total = clients.length;
-  const ativos = clients.filter(c=>!["Encerrado","Benefício concedido"].includes(c.status)&&!ehIndeferido(c)).length;
-  const concedidos = clients.filter(c=>c.status==="Benefício concedido").length;
+  const ativos = clients.filter(c=>!["Encerrado",...STATUS_EXITO].includes(c.status)&&!ehIndeferido(c)).length;
+  const concedidos = clients.filter(c=>STATUS_EXITO.includes(c.status)).length;
   const recTotal = clients.reduce((s,c)=>s+valorFaturavel(c),0);
   const recebido = clients.reduce((s,c)=>s+lerParcelas(c).filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0),0);
   const lAtivos = leads.filter(l=>l.status!=="Convertido"&&l.status!=="Perdido").length;
@@ -1536,7 +1558,7 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
         {[
           {val:total,label:"Clientes",color:C.info,ir:["clientes",{}]},
           {val:ativos,label:"Processos Ativos",color:C.accent,ir:["clientes",{grupo:"ativos"}]},
-          {val:concedidos,label:"Concedidos",color:C.success,ir:["clientes",{status:"Benefício concedido"}]},
+          {val:concedidos,label:"Êxitos",color:C.success,ir:["clientes",{grupo:"exito"}]},
           {val:lAtivos,label:"Leads Ativos",color:C.warn,ir:["leads",{ativos:true}]},
           {val:lQuentes,label:"Leads Quentes 🔥",color:C.danger,ir:["leads",{temp:"🔥 Quente"}]},
           {val:pendentes,label:"Tarefas Vencidas",color:pendentes>0?C.danger:C.success,ir:["agenda",{}]},
@@ -1607,12 +1629,13 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
 // ═══════════════════════════════════════════════════════════════════════════
 // LISTA DE CLIENTES
 // ═══════════════════════════════════════════════════════════════════════════
-const GRUPOS_CLI = { ativos:"Processos ativos", areceber:"Com valor a receber", pagantes:"Com pagamento recebido" };
+const GRUPOS_CLI = { ativos:"Processos ativos", areceber:"Com valor a receber", pagantes:"Com pagamento recebido", exito:"Com êxito (concedido, acordo ou procedente)" };
 function recebidoCli(c) { return lerParcelas(c).filter(p=>p.pago).reduce((t,p)=>t+(Number(p.valor)||0),0); }
 function noGrupo(c, g) {
-  if (g==="ativos") return !["Encerrado","Benefício concedido"].includes(c.status) && !ehIndeferido(c);
+  if (g==="ativos") return !["Encerrado",...STATUS_EXITO].includes(c.status) && !ehIndeferido(c);
   if (g==="areceber") return valorFaturavel(c) - recebidoCli(c) > 0.009;
   if (g==="pagantes") return recebidoCli(c) > 0;
+  if (g==="exito") return STATUS_EXITO.includes(c.status);
   return true;
 }
 function FiltroPainel({ texto, onLimpar }) {
@@ -1646,7 +1669,7 @@ function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
   const totalRec = filtered.reduce((t,c)=>t+recebidoCli(c),0);
 
   const exportCSV = () => {
-    const header = ["Nome","CPF","Telefone","Benefício","Status","Honorários","Cadastro"].join(";");
+    const header = ["Nome","CPF","Telefone","Produto / Serviço","Status","Honorários","Cadastro"].join(";");
     const rows = filtered.map(c=>[c.nome,c.cpf,c.telefone,c.beneficio,c.status,c.valorHonorarios,fmtDate(c.dataCadastro)].join(";"));
     const blob = new Blob([[header,...rows].join("\n")],{type:"text/csv;charset=utf-8"});
     const a = document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="clientes.csv"; a.click();
@@ -1657,7 +1680,7 @@ function ClientesList({ clients, tarefas, onSelect, onNew, preset = {} }) {
       <div style={{marginBottom:16,display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
         <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Buscar</label><input style={S.inp} placeholder="Nome, CPF, telefone, NB..." value={search} onChange={e=>setSearch(e.target.value)}/></div>
         <div style={{flex:"1 1 150px"}}><label style={S.lbl}>Status</label><select style={S.sel} value={fStatus} onChange={e=>setFStatus(e.target.value)}><option value="">Todos</option>{STATUS_CLI.map(s=><option key={s}>{s}</option>)}</select></div>
-        <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Benefício</label><select style={S.sel} value={fBen} onChange={e=>setFBen(e.target.value)}><option value="">Todos</option>{[...new Set([...BENEFICIOS, ...clients.map(c=>c.beneficio).filter(Boolean)])].sort().map(b=><option key={b}>{b}</option>)}</select></div>
+        <div style={{flex:"1 1 180px"}}><label style={S.lbl}>Produto / Serviço</label><select style={S.sel} value={fBen} onChange={e=>setFBen(e.target.value)}><option value="">Todos</option>{[...new Set([...BENEFICIOS, ...clients.map(c=>c.beneficio).filter(Boolean)])].sort().map(b=><option key={b}>{b}</option>)}</select></div>
         <div style={{flex:"1 1 160px"}}><label style={S.lbl}>Contrato fechado em</label><select style={S.sel} value={fPer} onChange={e=>setFPer(e.target.value)}>{PERIODOS.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select></div>
         {fPer==="custom"&&<>
           <div style={{flex:"1 1 140px"}}><label style={S.lbl}>De</label><input type="date" style={S.inp} value={dIni} onChange={e=>setDIni(e.target.value)}/></div>
@@ -1827,7 +1850,7 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
             <F label="Telefone"><input style={S.inp} value={form.telefone||""} onChange={e=>setForm({...form,telefone:e.target.value})}/></F>
             <F label="E-mail"><input style={S.inp} value={form.email||""} onChange={e=>setForm({...form,email:e.target.value})}/></F>
             <F label="Número do Benefício/NB"><input style={S.inp} value={form.numeroBeneficio||""} onChange={e=>setForm({...form,numeroBeneficio:e.target.value})} placeholder="NB ou nº do processo"/></F>
-            <F label="Benefício"><select style={S.sel} value={form.beneficio||""} onChange={e=>setForm({...form,beneficio:e.target.value})}>{[...new Set([form.beneficio, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
+            <F label="Produto / Serviço"><select style={S.sel} value={form.beneficio||""} onChange={e=>setForm({...form,beneficio:e.target.value})}>{[...new Set([form.beneficio, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
             <F label="Status"><select style={S.sel} value={form.status||""} onChange={e=>setForm({...form,status:e.target.value})}>{STATUS_CLI.map(s=><option key={s}>{s}</option>)}</select></F>
             <F label="Data do contrato"><input type="date" style={S.inp} value={diaISO(form.dataCadastro)} onChange={e=>setForm({...form,dataCadastro:e.target.value})}/></F>
           </div>
@@ -1986,7 +2009,7 @@ function textoDocx(b64) {
   const xml = partes.map(n=>zip.file(n)?.asText()||"").join("\n");
   return xml.replace(/<w:tab\/>/g, "\t").replace(/<\/w:p>/g, "\n").replace(/<[^>]+>/g, "").replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#39;|&apos;/g,"'").replace(/\n{3,}/g,"\n\n").trim();
 }
-const PROMPT_CONTRATO = `Você recebe um CONTRATO DE HONORÁRIOS ADVOCATÍCIOS (direito previdenciário). Extraia os dados do CONTRATANTE (cliente) e as condições financeiras.
+const PROMPT_CONTRATO = `Você recebe um CONTRATO DE HONORÁRIOS ADVOCATÍCIOS (direito previdenciário ou bancário). Extraia os dados do CONTRATANTE (cliente) e as condições financeiras.
 Retorne APENAS JSON válido, sem markdown:
 {"nome":"","cpf":"","rg":"","dataNascimento":"AAAA-MM-DD","nacionalidade":"","estadoCivil":"","profissao":"","endereco":"","cep":"","telefone":"","email":"",
 "beneficio":"","numeroBeneficio":"","dataContrato":"AAAA-MM-DD",
@@ -2115,7 +2138,7 @@ function NovoCliente({ onSave, onCancel }) {
           <F label="Telefone"><input style={S.inp} value={form.telefone} onChange={e=>setForm({...form,telefone:e.target.value})} placeholder="(96) 99000-0000"/></F>
           <F label="E-mail"><input style={S.inp} value={form.email||""} onChange={e=>setForm({...form,email:e.target.value})}/></F>
           <F label="Data do contrato"><input type="date" style={S.inp} value={diaISO(form.dataCadastro)} onChange={e=>setForm({...form,dataCadastro:e.target.value})}/></F>
-          <F label="Benefício"><select style={S.sel} value={form.beneficio} onChange={e=>setForm({...form,beneficio:e.target.value})}>{[...new Set([form.beneficio, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
+          <F label="Produto / Serviço"><select style={S.sel} value={form.beneficio} onChange={e=>setForm({...form,beneficio:e.target.value})}>{[...new Set([form.beneficio, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
           <F label="Nº Benefício/NB"><input style={S.inp} value={form.numeroBeneficio} onChange={e=>setForm({...form,numeroBeneficio:e.target.value})}/></F>
           <F label="Honorários (R$)"><input style={S.inp} type="number" value={form.valorHonorarios} onChange={e=>setForm({...form,valorHonorarios:e.target.value})}/></F>
           <F label="Parcelas"><input style={S.inp} type="number" min={1} value={form.parcelamentoTotal} onChange={e=>setForm({...form,parcelamentoTotal:Number(e.target.value)})}/></F>
@@ -2168,7 +2191,9 @@ function LeadDetalhe({ lead, followUps, onBack, onSave, onSaveFollowUp, onDelFol
   const save = async () => { setSaving(true); await onSave(form); setSaving(false); };
   const wpp = (t) => abrirWhatsApp(form.telefone, t);
   const msgs = [
-    {label:"Apresentação inicial", texto:`Olá ${form.nome?.split(" ")[0]}! Sou a Yalley Vasconcelos, advogada previdenciária em Macapá. Vi que você tem interesse em ${form.beneficioInteresse}. Posso te ajudar a conquistar esse benefício! Podemos conversar?`},
+    {label:"Apresentação inicial", texto: ehBancario(form.beneficioInteresse)
+      ? `Olá ${form.nome?.split(" ")[0]}! Sou a Yalley Vasconcelos, advogada em Macapá, com atuação em direito bancário. Vi que você precisa de ajuda com ${form.beneficioInteresse}. Posso analisar seu contrato e te dizer quais são seus direitos. Podemos conversar?`
+      : `Olá ${form.nome?.split(" ")[0]}! Sou a Yalley Vasconcelos, advogada previdenciária em Macapá. Vi que você tem interesse em ${form.beneficioInteresse}. Posso te ajudar a conquistar esse benefício! Podemos conversar?`},
     {label:"Lembrete de retorno", texto:`Olá ${form.nome?.split(" ")[0]}! Passando para saber se você teve oportunidade de pensar sobre o ${form.beneficioInteresse}. Quando podemos conversar?`},
     {label:"Urgência", texto:`Olá ${form.nome?.split(" ")[0]}! Seu caso de ${form.beneficioInteresse} tem prazo. Posso fazer uma análise gratuita agora?`},
   ];
@@ -2189,7 +2214,7 @@ function LeadDetalhe({ lead, followUps, onBack, onSave, onSaveFollowUp, onDelFol
           <div style={S.grid2}>
             <F label="Nome"><input style={S.inp} value={form.nome||""} onChange={e=>setForm({...form,nome:e.target.value})}/></F>
             <F label="Telefone"><input style={S.inp} value={form.telefone||""} onChange={e=>setForm({...form,telefone:e.target.value})}/></F>
-            <F label="Benefício"><select style={S.sel} value={form.beneficioInteresse||""} onChange={e=>setForm({...form,beneficioInteresse:e.target.value})}>{[...new Set([form.beneficioInteresse, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
+            <F label="Produto / Serviço"><select style={S.sel} value={form.beneficioInteresse||""} onChange={e=>setForm({...form,beneficioInteresse:e.target.value})}>{[...new Set([form.beneficioInteresse, ...BENEFICIOS].filter(Boolean))].map(b=><option key={b}>{b}</option>)}</select></F>
             <F label="Origem"><select style={S.sel} value={form.origem||""} onChange={e=>setForm({...form,origem:e.target.value})}>{ORIGEM_OPTS.map(o=><option key={o}>{o}</option>)}</select></F>
             <F label="Temperatura"><select style={S.sel} value={form.temperatura||""} onChange={e=>setForm({...form,temperatura:e.target.value})}>{TEMP_OPTS.map(t=><option key={t}>{t}</option>)}</select></F>
             <F label="Status"><select style={S.sel} value={form.status||""} onChange={e=>setForm({...form,status:e.target.value})}>{STATUS_LEAD.map(s=><option key={s}>{s}</option>)}</select></F>
@@ -2302,7 +2327,7 @@ function NovoLead({ onSave, onCancel }) {
         <div style={S.grid2}>
           <F label="Nome *"><input style={S.inp} value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})}/></F>
           <F label="Telefone *"><input style={S.inp} value={form.telefone} onChange={e=>setForm({...form,telefone:e.target.value})} placeholder="(96) 99000-0000"/></F>
-          <F label="Benefício"><select style={S.sel} value={form.beneficioInteresse} onChange={e=>setForm({...form,beneficioInteresse:e.target.value})}>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></F>
+          <F label="Produto / Serviço"><select style={S.sel} value={form.beneficioInteresse} onChange={e=>setForm({...form,beneficioInteresse:e.target.value})}>{BENEFICIOS.map(b=><option key={b}>{b}</option>)}</select></F>
           <F label="Origem"><select style={S.sel} value={form.origem} onChange={e=>setForm({...form,origem:e.target.value})}>{ORIGEM_OPTS.map(o=><option key={o}>{o}</option>)}</select></F>
           <F label="Temperatura"><select style={S.sel} value={form.temperatura} onChange={e=>setForm({...form,temperatura:e.target.value})}>{TEMP_OPTS.map(t=><option key={t}>{t}</option>)}</select></F>
           <F label="Status"><select style={S.sel} value={form.status} onChange={e=>setForm({...form,status:e.target.value})}>{STATUS_LEAD.filter(s=>s!=="Convertido").map(s=><option key={s}>{s}</option>)}</select></F>
@@ -2541,7 +2566,7 @@ function Login({ onOk }) {
     <div style={{...S.app, alignItems:"center", justifyContent:"center", padding:16}}>
       <form onSubmit={entrar} style={{...S.card, width:"100%", maxWidth:360, textAlign:"center"}}>
         <div style={S.logo}>Yalley Vasconcelos</div>
-        <div style={{...S.logoSub, marginBottom:20}}>CRM Previdenciário · OAB/AP 3262</div>
+        <div style={{...S.logoSub, marginBottom:20}}>CRM Advocacia · OAB/AP 3262</div>
         <label style={{...S.lbl, textAlign:"left"}}>Senha de acesso</label>
         <input type="password" autoFocus autoComplete="current-password" style={S.inp} value={senha} onChange={e=>setSenha(e.target.value)}/>
         {erro && <div style={{color:C.danger, fontSize:12, marginTop:8, fontFamily:FM}}>⚠ {erro}</div>}
@@ -2741,7 +2766,7 @@ function App() {
       <header style={S.header}>
         <div>
           <div style={S.logo}>Yalley Vasconcelos</div>
-          <div style={S.logoSub}>CRM Previdenciário · OAB/AP 3262</div>
+          <div style={S.logoSub}>CRM Advocacia · OAB/AP 3262</div>
         </div>
         <nav style={S.nav}>
           {navItems.map(n=>(
