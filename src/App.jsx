@@ -1217,7 +1217,51 @@ function BarrasSimples({ titulo, itens, total, onClick, ativo }) {
   );
 }
 
-function Recebimentos({ clients, onSelect, preset = {} }) {
+function Inadimplentes({ clients, onSelect, onCobrar }) {
+  const [aberto, setAberto] = useState(true);
+  const linhas = clients
+    .filter(c => !ehIndeferido(c))
+    .map(c => ({ c, r: resumoCobranca(c) }))
+    .filter(x => x.r.vencidas.length > 0)
+    .sort((a,b) => b.r.maiorAtraso - a.r.maiorAtraso);
+  const total = linhas.reduce((t,x)=>t+x.r.totalVencido,0);
+  return (
+    <div style={{...S.card, borderColor: linhas.length ? C.danger+"66" : undefined}}>
+      <div style={{...S.cardTitle,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",cursor:"pointer"}} onClick={()=>setAberto(!aberto)}>
+        <span>Em atraso ({linhas.length})</span>
+        <span style={{display:"flex",gap:10,alignItems:"center"}}>
+          <span style={{fontFamily:FD,fontSize:18,color:linhas.length?C.danger:C.success}}>{fmtCur(total)}</span>
+          <span style={{fontSize:12,color:C.muted}}>{aberto?"▲":"▼"}</span>
+        </span>
+      </div>
+      {aberto && linhas.length===0 && <div style={{fontSize:12,color:C.muted}}>Nenhuma parcela vencida e não paga. Só entram aqui parcelas com data de vencimento preenchida.</div>}
+      {aberto && linhas.length>0 && (
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:680}}>
+            <thead><tr style={{color:C.muted,fontSize:10,textTransform:"uppercase",letterSpacing:"0.08em"}}>
+              <th style={{textAlign:"left",padding:6}}>Cliente</th><th style={{textAlign:"left",padding:6}}>Produto / Serviço</th><th style={{textAlign:"center",padding:6}}>Parcelas</th><th style={{textAlign:"left",padding:6}}>Atraso</th><th style={{textAlign:"right",padding:6}}>Em atraso</th><th style={{padding:6}}></th>
+            </tr></thead>
+            <tbody>{linhas.map(({c,r})=>{
+              const nv = NIVEIS_COBRANCA[r.nivel];
+              return (
+                <tr key={c.id} style={{borderTop:`1px solid ${C.border}`}}>
+                  <td style={{padding:6,fontWeight:600,cursor:"pointer"}} onClick={()=>onSelect(c)} title="Abrir cliente">{c.nome}</td>
+                  <td style={{padding:6,color:C.muted}}>{c.beneficio}</td>
+                  <td style={{padding:6,textAlign:"center",fontFamily:FM}}>{r.vencidas.length}/{r.total}</td>
+                  <td style={{padding:6}}><Tag color={nv.cor}>{r.maiorAtraso} dias</Tag></td>
+                  <td style={{padding:6,textAlign:"right",fontFamily:FM,fontWeight:700,color:C.danger,whiteSpace:"nowrap"}}>{fmtCur(r.totalVencido)}</td>
+                  <td style={{padding:6,textAlign:"right"}}><button style={{...S.btn("primary"),padding:"6px 14px"}} onClick={()=>onCobrar(c)}>Cobrar</button></td>
+                </tr>);
+            })}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Recebimentos({ clients, onSelect, onSaveMensagem, preset = {} }) {
+  const [cobrar, setCobrar] = useState(null);
   const [per, setPer] = useState(preset.per ?? "mes");
   const [dIni, setDIni] = useState(preset.dIni || "");
   const [dFim, setDFim] = useState(preset.dFim || "");
@@ -1282,9 +1326,22 @@ function Recebimentos({ clients, onSelect, preset = {} }) {
       </div>}
 
       <div style={{display:"flex",gap:14,flexWrap:"wrap",marginBottom:14}}>
-        <BarrasSimples titulo="Por benefício" itens={porBen} total={porBen.reduce((s,i)=>s+i.valor,0)} onClick={n=>setBen(ben===n?"":n)} ativo={ben}/>
+        <BarrasSimples titulo="Por produto" itens={porBen} total={porBen.reduce((s,i)=>s+i.valor,0)} onClick={n=>setBen(ben===n?"":n)} ativo={ben}/>
         <BarrasSimples titulo="Por forma de pagamento" itens={porForma} total={porForma.reduce((s,i)=>s+i.valor,0)} onClick={n=>setForma(forma===n?"":n)} ativo={forma}/>
       </div>
+
+      <Inadimplentes clients={clients} onSelect={onSelect} onCobrar={setCobrar}/>
+      {cobrar && (
+        <div style={S.modal} onClick={()=>setCobrar(null)}>
+          <div style={{...S.modalBox,maxWidth:760,padding:0,background:"transparent",border:"none",boxShadow:"none"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:10}}>
+              <div style={{fontFamily:FD,fontWeight:800,fontSize:18,color:C.text}}>{cobrar.nome}</div>
+              <button style={S.btn("ghost")} onClick={()=>setCobrar(null)}>Fechar</button>
+            </div>
+            <CobrancaIA cliente={cobrar} onEnviar={(t)=>{ const foi = abrirWhatsApp(cobrar.telefone, t); if (foi && onSaveMensagem) onSaveMensagem({id:uid(),clienteId:cobrar.id,de:"escritorio",texto:t,data:hoje()}); return foi; }}/>
+          </div>
+        </div>
+      )}
 
       <div style={S.card}>
         <div style={S.cardTitle}>Pagamentos ({lista.length})</div>
@@ -2331,8 +2388,8 @@ function LeadDetalhe({ lead, followUps, onBack, onSave, onSaveFollowUp, onDelFol
   const wpp = (t) => abrirWhatsApp(form.telefone, t);
   const msgs = [
     {label:"Apresentação inicial", texto: ehBancario(form.beneficioInteresse)
-      ? `Olá ${form.nome?.split(" ")[0]}! Sou a Yalley Vasconcelos, advogada em Macapá, com atuação em direito bancário. Vi que você precisa de ajuda com ${form.beneficioInteresse}. Posso analisar seu contrato e te dizer quais são seus direitos. Podemos conversar?`
-      : `Olá ${form.nome?.split(" ")[0]}! Sou a Yalley Vasconcelos, advogada previdenciária em Macapá. Vi que você tem interesse em ${form.beneficioInteresse}. Posso te ajudar a conquistar esse benefício! Podemos conversar?`},
+      ? `Olá ${form.nome?.split(" ")[0]}! Sou o Yalley Vasconcelos, advogado em Macapá, com atuação em direito bancário. Vi que você precisa de ajuda com ${form.beneficioInteresse}. Posso analisar seu contrato e te dizer quais são seus direitos. Podemos conversar?`
+      : `Olá ${form.nome?.split(" ")[0]}! Sou o Yalley Vasconcelos, advogado previdenciarista em Macapá. Vi que você tem interesse em ${form.beneficioInteresse}. Posso te ajudar a conquistar esse benefício! Podemos conversar?`},
     {label:"Lembrete de retorno", texto:`Olá ${form.nome?.split(" ")[0]}! Passando para saber se você teve oportunidade de pensar sobre o ${form.beneficioInteresse}. Quando podemos conversar?`},
     {label:"Urgência", texto:`Olá ${form.nome?.split(" ")[0]}! Seu caso de ${form.beneficioInteresse} tem prazo. Posso fazer uma análise gratuita agora?`},
   ];
@@ -2962,7 +3019,7 @@ function App() {
         ) : view==="gestao" ? (
           <Gestao clients={clients} leads={leads} timeline={timeline} metas={metas} onSaveMeta={saveMeta} onSelect={c=>setSelectedClient(c)}/>
         ) : view==="recebimentos" ? (
-          <Recebimentos key={"r"+preset.v} preset={preset.f} clients={clients} onSelect={c=>setSelectedClient(c)}/>
+          <Recebimentos key={"r"+preset.v} preset={preset.f} clients={clients} onSelect={c=>setSelectedClient(c)} onSaveMensagem={saveMensagem}/>
         ) : view==="agenda" ? (
           <AgendaGlobal clients={clients} leads={leads} tarefas={tarefas} followUps={followUps}
             onSaveTarefa={saveTarefa} onDelTarefa={delTarefa} onSaveFollowUp={saveFollowUp}
