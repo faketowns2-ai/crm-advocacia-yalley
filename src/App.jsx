@@ -487,13 +487,13 @@ const S = {
   main: { flex:1, padding:"28px 28px", maxWidth:1400, margin:"0 auto", width:"100%", boxSizing:"border-box" },
   card: { background:"linear-gradient(180deg,rgba(255,255,255,0.05) 0%,rgba(255,255,255,0.02) 100%)", border:"1px solid rgba(255,255,255,0.09)", borderRadius:22, padding:22, marginBottom:16, boxShadow:"0 10px 40px rgba(5,0,20,0.35)" },
   cardTitle: { fontFamily:FD, fontSize:18, fontWeight:800, color:C.text, letterSpacing:"-0.01em", textTransform:"uppercase", marginBottom:16, paddingBottom:12, borderBottom:"1px solid rgba(255,255,255,0.08)" },
-  grid2: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:14 },
+  grid2: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(min(100%,340px),1fr))", gap:14 },
   grid3: { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))", gap:12 },
   inp: { background:"rgba(8,2,22,0.55)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:14, padding:"10px 14px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" },
   sel: { background:"rgba(8,2,22,0.55)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:14, padding:"10px 14px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" },
   lbl: { display:"block", fontSize:10, color:C.muted, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.12em", fontFamily:FB, fontWeight:700 },
   btn: v => ({ padding:"10px 20px", borderRadius:PILL, cursor:"pointer", fontSize:11, fontWeight:800, letterSpacing:"0.06em", textTransform:"uppercase", fontFamily:FB, transition:"all 0.2s", background:v==="primary"?C.accent:v==="success"?C.success:v==="danger"?C.danger:v==="info"?C.info:v==="warn"?C.warn:v==="ghost"?"transparent":"rgba(255,255,255,0.08)", color:v==="primary"||v==="success"||v==="warn"?C.bg:v==="ghost"?C.text:C.text, border:v==="ghost"?"1px solid rgba(255,255,255,0.22)":"none", boxShadow:v==="primary"?"0 0 28px rgba(212,255,58,0.28)":"none" }),
-  badge: col => ({ display:"inline-block", padding:"3px 10px", borderRadius:PILL, fontSize:10, fontWeight:700, letterSpacing:"0.04em", background:col+"1f", color:col, border:`1px solid ${col}55`, fontFamily:FB }),
+  badge: col => ({ display:"inline-block", whiteSpace:"nowrap", padding:"3px 10px", borderRadius:PILL, fontSize:10, fontWeight:700, letterSpacing:"0.04em", background:col+"1f", color:col, border:`1px solid ${col}55`, fontFamily:FB }),
   textarea: { background:"rgba(8,2,22,0.55)", border:"1px solid rgba(255,255,255,0.12)", borderRadius:14, padding:"10px 14px", color:C.text, fontFamily:FB, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none", resize:"vertical", lineHeight:1.7 },
   modal: { position:"fixed", inset:0, background:"rgba(8,2,22,0.7)", backdropFilter:"blur(8px)", WebkitBackdropFilter:"blur(8px)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:16 },
   modalBox: { background:"#170c33", border:"1px solid rgba(255,255,255,0.1)", borderRadius:28, padding:28, maxWidth:680, width:"100%", maxHeight:"88vh", overflowY:"auto", boxShadow:"0 30px 80px rgba(0,0,0,0.55)" },
@@ -1503,7 +1503,7 @@ function Gestao({ clients, leads, timeline, metas, onSaveMeta, onSelect }) {
         </div>
         <div><label style={S.lbl}>Semestre</label><select style={{...S.sel,minWidth:180}} value={sem} onChange={e=>setSem(e.target.value)}>{sems.map(s=><option key={s} value={s}>{rotuloSem(s)}</option>)}</select></div>
       </div>
-      <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:14}}>
+      <div className="crm-tabs" style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:14}}>
         {abas.map(([k,l])=><button key={k} onClick={()=>setAba(k)} style={S.navBtn(aba===k)}>{l}</button>)}
       </div>
 
@@ -1766,7 +1766,7 @@ function Dashboard({ clients, leads, tarefas, onSelectClient, onNewClient, onNew
         ))}
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginTop:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(min(100%,340px),1fr))",gap:14,marginTop:16}}>
         <div style={S.card}>
           <div style={{...S.cardTitle,cursor:"pointer"}} onClick={()=>onIr("agenda",{})} title="Abrir Agenda">Tarefas Urgentes <span style={{fontSize:11,color:C.muted}}>→</span></div>
           {tarefasUrgentes.length===0&&<p style={{color:C.muted,fontSize:12}}>Sem tarefas pendentes.</p>}
@@ -1997,8 +1997,8 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
     <div>
       <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:18,flexWrap:"wrap"}}>
         <button onClick={onBack} style={{...S.btn("ghost"),padding:"6px 12px"}}>← Voltar</button>
-        <div style={{flex:1}}>
-          <h2 style={{fontFamily:FD,fontSize:19,color:C.accentLight,margin:0}}>{form.nome}</h2>
+        <div style={{flex:"1 1 260px",minWidth:0}}>
+          <h2 style={{fontFamily:FD,fontSize:19,color:C.accentLight,margin:0,lineHeight:1.2,overflowWrap:"anywhere"}}>{form.nome}</h2>
           <span style={{fontFamily:FM,fontSize:10,color:C.muted}}>{form.beneficio}{form.numeroBeneficio?` · NB: ${form.numeroBeneficio}`:""}</span>
         </div>
         <Tag color={statusColor[form.status]||C.muted}>{form.status}</Tag>
@@ -2019,8 +2019,8 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
         </div>
       )}
 
-      <div style={{display:"flex",gap:4,marginBottom:16,flexWrap:"wrap"}}>
-        {tabs.map(t=><button key={t.k} style={{...S.navBtn(tab===t.k),borderRadius:7}} onClick={()=>setTab(t.k)}>{t.l}</button>)}
+      <div className="crm-tabs" style={{display:"flex",gap:4,marginBottom:16,flexWrap:"wrap"}}>
+        {tabs.map(t=><button key={t.k} style={S.navBtn(tab===t.k)} onClick={()=>setTab(t.k)}>{t.l}</button>)}
       </div>
 
       {tab==="dados" && (
@@ -2359,19 +2359,17 @@ function LeadCard({ lead, onClick, onConvert }) {
   const wpp = (e) => { e.stopPropagation(); abrirWhatsApp(lead.telefone); };
   return (
     <div onClick={onClick} style={{background:C.card,border:`1px solid ${tempColor[lead.temperatura]||C.border}`,borderLeft:`4px solid ${tempColor[lead.temperatura]||C.border}`,borderRadius:10,padding:12,cursor:"pointer",marginBottom:8}}>
-      <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
-        <div style={{flex:1}}>
-          <div style={{fontWeight:700,fontSize:13,marginBottom:2}}>{lead.nome}</div>
-          <div style={{fontSize:11,color:C.muted,fontFamily:FM,marginBottom:4}}>{lead.telefone} · {lead.origem}</div>
-          <div style={{fontSize:11,color:C.accentLight}}>{lead.beneficioInteresse}</div>
-          {lead.observacoes&&<div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic",overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{lead.observacoes}</div>}
-        </div>
-        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+      <div style={{minWidth:0}}>
+        <div style={{fontWeight:700,fontSize:14,lineHeight:1.25,marginBottom:6,overflowWrap:"anywhere"}}>{lead.nome}</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
           <Tag color={tempColor[lead.temperatura]||C.muted}>{lead.temperatura}</Tag>
           <Tag color={leadStatusColor[lead.status]||C.muted}>{lead.status}</Tag>
         </div>
+        <div style={{fontSize:11,color:C.muted,fontFamily:FM,marginBottom:4,overflowWrap:"anywhere"}}>{lead.telefone} · {lead.origem}</div>
+        <div style={{fontSize:12,color:C.accentLight,lineHeight:1.35}}>{lead.beneficioInteresse}</div>
+        {lead.observacoes&&<div style={{fontSize:11,color:C.muted,marginTop:4,fontStyle:"italic",overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{lead.observacoes}</div>}
       </div>
-      <div style={{display:"flex",gap:6,marginTop:8,justifyContent:"flex-end"}} onClick={e=>e.stopPropagation()}>
+      <div style={{display:"flex",gap:6,marginTop:10,justifyContent:"flex-end",flexWrap:"wrap"}} onClick={e=>e.stopPropagation()}>
         <button style={{...S.btn("ghost"),padding:"4px 10px",fontSize:11}} onClick={wpp}>WhatsApp</button>
         {!["Convertido","Perdido"].includes(lead.status)&&<button style={{...S.btn("success"),padding:"4px 10px",fontSize:11}} onClick={e=>{e.stopPropagation();onConvert(lead);}}>Converter</button>}
       </div>
@@ -2465,7 +2463,7 @@ function LeadsList({ leads, followUps, onNew, onSaveLead, onSaveFollowUp, onDelF
   });
 
   const col = (label,items,color,empty) => (
-    <div style={{flex:"1 1 230px",minWidth:0}}>
+    <div className="crm-kcol" style={{flex:"1 1 230px",minWidth:0}}>
       <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
         <div style={{width:8,height:8,borderRadius:"50%",background:color}}/>
         <span style={{fontFamily:FM,fontSize:10,color,textTransform:"uppercase",letterSpacing:"0.07em"}}>{label}</span>
@@ -2502,7 +2500,7 @@ function LeadsList({ leads, followUps, onNew, onSaveLead, onSaveFollowUp, onDelF
         <button style={S.btn("primary")} onClick={onNew}>+ Novo Lead</button>
       </div>
       {fAtivos&&<FiltroPainel texto="Leads ativos (sem convertidos e perdidos)" onLimpar={()=>setFAtivos(false)}/>}
-      <div style={{display:"flex",gap:12,overflowX:"auto",paddingBottom:8}}>
+      <div className="crm-kanban" style={{display:"flex",gap:12,overflowX:"auto",paddingBottom:8}}>
         {col("🔥 Quentes",quentes,C.danger,"Nenhum lead quente")}
         {col("🟡 Mornos",mornos,C.warn,"Nenhum lead morno")}
         {col("❄️ Frios",frios,C.info,"Nenhum lead frio")}
@@ -2959,12 +2957,12 @@ function App() {
 
   return (
     <div style={S.app}>
-      <header style={S.header}>
-        <div>
+      <header style={S.header} className="crm-header">
+        <div className="crm-brand">
           <div style={S.logo}>Yalley Vasconcelos</div>
           <div style={S.logoSub}>CRM Advocacia · OAB/AP 3262</div>
         </div>
-        <nav style={S.nav}>
+        <nav style={S.nav} className="crm-nav">
           {navItems.map(n=>(
             <button key={n.key} style={S.navBtn(view===n.key&&!selectedClient)} onClick={()=>irPara(n.key)}>
               {n.label}
@@ -2973,13 +2971,13 @@ function App() {
             </button>
           ))}
         </nav>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div className="crm-sync" style={{display:"flex",alignItems:"center",gap:8}}>
           <SyncBar status={syncStatus} lastSync={lastSync} onSync={loadData}/>
           <button onClick={sair} title="Sair do CRM neste aparelho" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,cursor:"pointer",fontSize:11,padding:"4px 10px",fontFamily:FB}}>Sair</button>
         </div>
       </header>
 
-      <main style={S.main}>
+      <main style={S.main} className="crm-main">
         {loading ? (
           <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:300}}>
             <Spin text="Carregando dados do Google Sheets..."/>

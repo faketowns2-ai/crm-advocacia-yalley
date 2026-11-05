@@ -43,3 +43,47 @@ select option { background: #1b0f38; color: #f6f3ff; }
     transform: translateY(-3px);
     box-shadow: 0 14px 40px rgba(5, 0, 20, 0.5), 0 0 0 1px rgba(212, 255, 58, 0.2);
 }
+
+/* ─── TABLET E TELAS ESTREITAS ─────────────────────────────────────────── */
+.crm-nav::-webkit-scrollbar, .crm-kanban::-webkit-scrollbar { height: 4px; }
+@media (max-width: 1180px) {
+    .crm-header {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: "brand sync" "nav nav";
+        row-gap: 10px !important;
+        padding: 12px 20px !important;
+    }
+    .crm-brand { grid-area: brand; min-width: 0; }
+    .crm-sync { grid-area: sync; justify-self: end; }
+    .crm-nav {
+        grid-area: nav;
+        flex-wrap: nowrap !important;
+        overflow-x: auto;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+        justify-self: stretch;
+    }
+    .crm-nav::-webkit-scrollbar { display: none; }
+    .crm-nav > button { flex: 1 0 auto; }
+    .crm-main { padding: 20px !important; }
+    .crm-kanban { scroll-snap-type: x proximity; }
+    .crm-tabs {
+        flex-wrap: nowrap !important;
+        overflow-x: auto;
+        scrollbar-width: none;
+        padding-bottom: 2px;
+    }
+    .crm-tabs::-webkit-scrollbar { display: none; }
+    .crm-tabs > button { flex: 0 0 auto; }
+    .crm-main table th:first-child, .crm-main table td:first-child { min-width: 140px; }
+    .crm-kcol { flex: 0 0 260px !important; scroll-snap-align: start; }
+}
+@media (max-width: 640px) {
+    .crm-header { padding: 10px 14px !important; }
+    .crm-main { padding: 16px 14px !important; }
+    .crm-sync .crm-sync-hora { display: none; }
+}
+@media (max-width: 480px) {
+    .crm-kcol { flex: 0 0 85% !important; }
+}
