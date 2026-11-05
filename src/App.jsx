@@ -271,7 +271,7 @@ async function extrairDados(base64, mediaType, fileName, instrucao = "", nomeCli
 
 // ─── MENSAGEM IA ──────────────────────────────────────────────────────────────
 const ASSINATURA = "Yalley Vasconcelos, Advogado";
-const MSG_TIPOS = { protocolo:"Processo Protocolado", pericia:"Perícia Agendada", resultado:"Movimentação Processual", aprovado:"Benefício Concedido", recurso:"Recurso Interposto", documento:"📎 Só resumir o documento anexado" };
+const MSG_TIPOS = { protocolo:"Processo Protocolado", pericia:"Perícia Agendada", resultado:"Movimentação Processual", aprovado:"Benefício Concedido", recurso:"Recurso Interposto", cobranca:"💰 Cobrança de honorários (usa as parcelas)", documento:"📎 Só resumir o documento anexado" };
 async function chamarIA(content, maxTokens, qualidade) {
   const r = await fetch("/api/claude", {
     method:"POST", headers:{"Content-Type":"application/json", ...authHeaders()},
@@ -288,6 +288,139 @@ async function gerarMsgIA(cliente, tipo, orientacao = "") {
   let p = `Mensagem curta profissional para WhatsApp para ${map[tipo]} ao cliente ${String(cliente.nome||"").split(" ")[0]}, processo de ${cliente.beneficio}. Tom acolhedor, máximo 5 linhas. Assine "${ASSINATURA}". Não use travessão.`;
   if (orientacao.trim()) p += `\n\nOrientação do advogado (siga com prioridade): ${orientacao.trim()}`;
   return chamarIA(p, 400);
+}
+
+// ─── COBRANÇA DE HONORÁRIOS COM IA ───────────────────────────────────────────
+const PIX_ESCRITORIO = "(96) 99121-9866 (telefone), em nome de Yalley da Silva Vasconcelos";
+const NIVEIS_COBRANCA = [
+  { n:0, nome:"Lembrete de vencimento", cor:"#6aa8ff", tom:"lembrete gentil e simpático de que a parcela vence em breve, sem qualquer cobrança ou pressão" },
+  { n:1, nome:"Atraso leve (1 a 5 dias)", cor:"#a77bff", tom:"lembrete cordial, presumindo esquecimento, leve e respeitoso" },
+  { n:2, nome:"Atraso (6 a 15 dias)", cor:"#ffb547", tom:"cordial porém firme: deixe claro que o pagamento está em atraso, peça a regularização ou uma data de pagamento e ofereça conversar se houver dificuldade" },
+  { n:3, nome:"Atraso relevante (16 a 30 dias)", cor:"#ff9447", tom:"firme e objetivo: informe o atraso, os encargos contratuais incidentes, peça o pagamento ou uma proposta de acordo em até 3 dias úteis" },
+  { n:4, nome:"Inadimplência (31 a 60 dias)", cor:"#ff6b6b", tom:"formal e insistente, em tom de notificação: registre o inadimplemento, os encargos do contrato, dê prazo de 5 dias úteis para pagamento ou acordo e informe que, sem retorno, o escritório adotará as medidas legais cabíveis para a cobrança" },
+  { n:5, nome:"Notificação final (mais de 60 dias)", cor:"#ff3b5c", tom:"notificação extrajudicial final, formal, séria e coercitiva dentro da lei: registre as tentativas anteriores de cobrança amigável, conceda prazo final de 5 dias úteis e informe que, sem pagamento ou acordo, o contrato de honorários será executado judicialmente por ser título executivo (art. 24 da Lei 8.906/94), podendo haver protesto e inclusão do nome em cadastros de inadimplentes" },
+];
+function resumoCobranca(c) {
+  const parc = lerParcelas(c);
+  const total = parc.length;
+  const padrao = Number(c.parcelamentoValor) || (Number(c.valorHonorarios)||0) / total;
+  const hj = hoje();
+  const dias = (a,b) => Math.round((new Date(b+"T12:00:00") - new Date(a+"T12:00:00")) / 86400000);
+  const comValor = parc.map((p,i)=>({ ...p, n:i+1, v: Number(p.valor)||padrao }));
+  const vencidas = comValor.filter(p=>!p.pago && p.venc && p.venc < hj).map(p=>({ ...p, atraso: dias(p.venc, hj) }));
+  const proxima = comValor.find(p=>!p.pago && p.venc && p.venc >= hj && dias(hj, p.venc) <= 5);
+  const pagas = comValor.filter(p=>p.pago).length;
+  const maiorAtraso = vencidas.reduce((m,p)=>Math.max(m,p.atraso),0);
+  const totalVencido = vencidas.reduce((t,p)=>t+p.v,0);
+  // Encargos do contrato padrão do escritório: multa de 10% + juros de 1% ao mês (pro rata)
+  const encargos = vencidas.reduce((t,p)=>t + p.v*0.10 + p.v*0.01*(p.atraso/30),0);
+  let nivel = null;
+  if (vencidas.length) nivel = maiorAtraso<=5?1 : maiorAtraso<=15?2 : maiorAtraso<=30?3 : maiorAtraso<=60?4 : 5;
+  else if (proxima) nivel = 0;
+  return { total, pagas, vencidas, proxima, maiorAtraso, totalVencido, encargos, nivel, diasParaVencer: proxima ? dias(hj, proxima.venc) : null };
+}
+async function gerarCobrancaIA(c, { nivel, citarEncargos, orientacao }) {
+  const r = resumoCobranca(c);
+  const nv = NIVEIS_COBRANCA[nivel];
+  const nome = String(c.nome||"").trim().split(" ")[0];
+  const nomeFmt = nome ? nome.charAt(0).toUpperCase()+nome.slice(1).toLowerCase() : "cliente";
+  const linhas = r.vencidas.map(p=>`parcela ${p.n}/${r.total}: ${fmtCur(p.v)}, vencida em ${fmtDate(p.venc)} (${p.atraso} dia(s) de atraso)`);
+  const fatos = [
+    `Cliente: ${nomeFmt}. Caso: ${c.beneficio||"serviços advocatícios"}. Honorários contratados: ${fmtCur(c.valorHonorarios)} em ${r.total} parcela(s); ${r.pagas} já paga(s).`,
+    r.vencidas.length ? `Parcelas em atraso: ${linhas.join("; ")}. Total em atraso: ${fmtCur(r.totalVencido)}.` : "Nenhuma parcela em atraso.",
+    r.proxima ? `Próxima parcela: ${r.proxima.n}/${r.total} de ${fmtCur(r.proxima.v)}, vence em ${fmtDate(r.proxima.venc)} (${r.diasParaVencer===0?"hoje":`em ${r.diasParaVencer} dia(s)`}).` : "",
+    citarEncargos && r.vencidas.length ? `O contrato prevê multa de 10% e juros de mora de 1% ao mês sobre o valor em atraso. Valor atualizado estimado até hoje: ${fmtCur(r.totalVencido + r.encargos)} (já com multa e juros).` : "Não mencione multa, juros nem valor atualizado.",
+    `Pagamento por PIX, chave ${PIX_ESCRITORIO}.`,
+  ].filter(Boolean).join("\n");
+  let p = `Você escreve mensagens de WhatsApp em nome do advogado ${ASSINATURA}, de Macapá/AP, para cobrar honorários advocatícios de um cliente. Escreva como o próprio advogado escreveria: natural, humano, adequado a este caso específico, sem frases prontas de robô e sem parecer modelo.
+
+FATOS (use exatamente estes valores e datas, não invente nada):
+${fatos}
+
+NÍVEL DE COBRANÇA: ${nv.nome}.
+TOM EXIGIDO: ${nv.tom}.
+
+LIMITES LEGAIS (obrigatórios, a mensagem não pode violar nenhum):
+1. Nada de ameaça de prisão, polícia, processo criminal ou qualquer consequência que a lei não prevê para dívida civil.
+2. Não expor a dívida a terceiros, familiares, empregador ou grupos; não insinuar que outras pessoas saberão.
+3. Nada de linguagem ofensiva, humilhante, vexatória, ironia ou constrangimento (art. 42 do CDC, por analogia, e ética da advocacia).
+4. Não ameaçar abandonar, atrasar ou prejudicar o processo do cliente, nem condicionar o andamento do caso ao pagamento.
+5. Só cite consequências reais e proporcionais ao nível: cobrança judicial, execução do contrato, protesto e cadastro de inadimplentes só podem aparecer nos níveis "Inadimplência" e "Notificação final".
+6. Não cite número da OAB.
+7. Não use travessão (— ou –) em hipótese alguma. Use vírgulas, pontos ou dois-pontos.
+
+FORMATO:
+1. Comece cumprimentando ${nomeFmt} pelo primeiro nome.
+2. ${nivel>=4?"Até 10 linhas, estrutura de notificação clara.":"No máximo 6 linhas."}
+3. Informe valores e vencimentos de forma clara e a chave PIX.
+4. ${nivel>=2?"Abra espaço para negociar uma data ou parcelamento, sem dispensar o valor.":"Agradeça a parceria."}
+5. Termine com a assinatura "${ASSINATURA}".
+6. Responda só com o texto da mensagem, sem comentários.`;
+  if (orientacao?.trim()) p += `\n\nOrientação do advogado para este caso (siga com prioridade, desde que respeite os limites legais): ${orientacao.trim()}`;
+  return chamarIA(p, 700);
+}
+
+function CobrancaIA({ cliente, onEnviar }) {
+  const r = resumoCobranca(cliente);
+  const [nivel, setNivel] = useState(r.nivel ?? 1);
+  const [citar, setCitar] = useState((r.nivel ?? 0) >= 3);
+  const [orient, setOrient] = useState("");
+  const [texto, setTexto] = useState("");
+  const [load, setLoad] = useState(false);
+  const [erro, setErro] = useState("");
+  const [ok, setOk] = useState(false);
+  useEffect(()=>{ setNivel(r.nivel ?? 1); setCitar((r.nivel ?? 0) >= 3); }, [r.nivel]);
+  const nv = NIVEIS_COBRANCA[nivel];
+  const gerar = async () => {
+    setErro(""); setLoad(true);
+    try { setTexto(await gerarCobrancaIA(cliente, { nivel, citarEncargos: citar, orientacao: orient })); }
+    catch(e) { setErro(e.message || "Erro ao gerar a mensagem"); }
+    setLoad(false);
+  };
+  const semPendencia = r.nivel === null;
+  return (
+    <div style={S.card}>
+      <div style={S.cardTitle}>Cobrança com IA</div>
+      {semPendencia ? (
+        <p style={{color:C.muted,fontSize:13}}>Nenhuma parcela em atraso nem vencendo nos próximos 5 dias. Se quiser cobrar mesmo assim, escolha o nível abaixo.</p>
+      ) : (
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:14}}>
+          <div style={{...S.stat,flex:"1 1 150px",padding:"12px 14px"}}><span style={{...S.statVal,fontSize:20,color:r.vencidas.length?C.danger:C.info}}>{r.vencidas.length?fmtCur(r.totalVencido):fmtCur(r.proxima?.v)}</span><div style={S.statLbl}>{r.vencidas.length?`${r.vencidas.length} parcela(s) em atraso`:"vence em breve"}</div></div>
+          <div style={{...S.stat,flex:"1 1 150px",padding:"12px 14px"}}><span style={{...S.statVal,fontSize:20}}>{r.vencidas.length?`${r.maiorAtraso} dias`:fmtDate(r.proxima?.venc)}</span><div style={S.statLbl}>{r.vencidas.length?"maior atraso":"vencimento"}</div></div>
+          {r.vencidas.length>0&&<div style={{...S.stat,flex:"1 1 150px",padding:"12px 14px"}}><span style={{...S.statVal,fontSize:20,color:C.warn}}>{fmtCur(r.totalVencido+r.encargos)}</span><div style={S.statLbl}>com multa 10% + juros 1% a.m.</div></div>}
+        </div>
+      )}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",marginBottom:10}}>
+        <div style={{flex:"1 1 240px"}}>
+          <label style={S.lbl}>Nível da cobrança {r.nivel!==null&&nivel===r.nivel?"(sugerido pelo atraso)":""}</label>
+          <select style={S.sel} value={nivel} onChange={e=>setNivel(Number(e.target.value))}>
+            {NIVEIS_COBRANCA.map(x=><option key={x.n} value={x.n}>{x.nome}</option>)}
+          </select>
+        </div>
+        <Tag color={nv.cor}>{nivel<=1?"Tom gentil":nivel<=3?"Tom firme":"Tom formal e coercitivo"}</Tag>
+      </div>
+      <label style={{display:"flex",gap:8,alignItems:"center",fontSize:12,color:C.muted,marginBottom:10,cursor:"pointer"}}>
+        <input type="checkbox" checked={citar} onChange={e=>setCitar(e.target.checked)}/>
+        Citar multa de 10% e juros de 1% ao mês (só marque se o contrato deste cliente prevê esses encargos)
+      </label>
+      <label style={S.lbl}>Orientação para a IA (opcional)</label>
+      <textarea style={{...S.textarea,minHeight:44}} value={orient} onChange={e=>setOrient(e.target.value)} placeholder="Ex.: ela já prometeu pagar dia 10 e não pagou; aceito dividir em 2x"/>
+      {erro&&<div style={{marginTop:10,color:C.danger,fontSize:12}}>⚠ {erro}</div>}
+      <div style={{display:"flex",justifyContent:"flex-end",marginTop:10}}>
+        <button style={S.btn("primary")} onClick={gerar} disabled={load}>{load?"Redigindo...":texto?"Gerar outra versão":"Gerar mensagem"}</button>
+      </div>
+      {texto&&(
+        <div style={{marginTop:12}}>
+          <textarea style={{...S.textarea,minHeight:160}} value={texto} onChange={e=>setTexto(e.target.value)}/>
+          <div style={{fontSize:11,color:C.muted,marginTop:6}}>Revise antes de enviar. A mensagem é enviada só para o WhatsApp do próprio cliente.</div>
+          <div style={{display:"flex",gap:8,marginTop:8,justifyContent:"flex-end",flexWrap:"wrap"}}>
+            <button style={S.btn("ghost")} onClick={()=>navigator.clipboard?.writeText(texto).catch(()=>{})}>Copiar</button>
+            <button style={S.btn("success")} onClick={()=>{ if(onEnviar(texto)){ setOk(true); setTimeout(()=>setOk(false),4000); } }}>{ok?"✓ Aberto no WhatsApp":"Enviar pelo WhatsApp"}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Lê um documento (decisão, carta de exigência, sentença, extrato...) e gera um resumo simples para o cliente
@@ -1778,6 +1911,9 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
         const b64 = await new Promise((ok,ko)=>{ const fr=new FileReader(); fr.onload=e=>ok(String(e.target.result).split(",")[1]); fr.onerror=()=>ko(new Error("Erro ao ler o arquivo")); fr.readAsDataURL(msgArquivo); });
         const contexto = msgTipo!=="documento" ? `Contexto escolhido pelo advogado: ${MSG_TIPOS[msgTipo]}. ` : "";
         t = await gerarMsgDocumento(form, b64, msgArquivo.type, msgArquivo.name, contexto + msgOrient);
+      } else if (msgTipo==="cobranca") {
+        const r = resumoCobranca(form);
+        t = await gerarCobrancaIA(form, { nivel: r.nivel ?? 1, citarEncargos: (r.nivel ?? 0) >= 3, orientacao: msgOrient });
       } else {
         t = await gerarMsgIA(form, msgTipo, msgOrient);
       }
@@ -1873,6 +2009,9 @@ function ClienteDetalhe({ cliente, tarefas, mensagens, timeline, onBack, onSave,
             <button style={S.btn("primary")} onClick={save} disabled={saving}>{saving?"Salvando...":"Salvar"}</button>
           </div>
         </div>
+      )}
+      {tab==="financeiro" && (
+        <CobrancaIA cliente={form} onEnviar={(t)=>{ const foi = wpp(t); if (foi) onSaveMensagem({id:uid(),clienteId:form.id,de:"escritorio",texto:t,data:hoje()}); return foi; }}/>
       )}
 
       {tab==="docs" && (
